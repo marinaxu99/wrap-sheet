@@ -14,6 +14,26 @@ const SWATCHES = [
   { name: 'Muted Clay', color: '#b5838d' }
 ];
 
+function addDays(isoDateStr, days) {
+  if (!isoDateStr) return '';
+  const [y, m, d] = isoDateStr.split('-').map(Number);
+  const date = new Date(y, m - 1, d);
+  date.setDate(date.getDate() + Number(days));
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function calculateDueDate(invoiceDate, termsPreset) {
+  if (!invoiceDate) return '';
+  if (termsPreset === 'due_receipt') return invoiceDate;
+  if (termsPreset === 'net_15') return addDays(invoiceDate, 15);
+  if (termsPreset === 'net_30') return addDays(invoiceDate, 30);
+  if (termsPreset === 'net_60') return addDays(invoiceDate, 60);
+  return null; // custom
+}
+
 function message(text) {
   const el = $('#message');
   if (!el) return;
@@ -44,7 +64,7 @@ function setPath(path, value) {
 }
 
 function getPath(path) {
-  return path.split('.').reduce((o, k) => o[k], state);
+  return path.split('.').reduce((o, k) => o?.[k], state);
 }
 
 function setSaveStatus(text, color = 'var(--muted)') {
@@ -132,6 +152,8 @@ function panel(title, description, content, tag = '') {
 }
 
 function projectView() {
+  const currentTerms = state.project.termsPreset || 'net_30';
+
   return panel('Set the scene.', 'Production metadata for the final invoice.',
     `<div class="form-grid">
       ${field('Project title', 'project.projectTitle', 'text', 'placeholder="e.g. Autumn campaign — Seoul" maxlength="200"')}
@@ -141,7 +163,22 @@ function projectView() {
       ${field('Shoot start', 'project.shootStart', 'date')}
       ${field('Shoot end', 'project.shootEnd', 'date')}
       ${field('Invoice date', 'project.invoiceDate', 'date')}
-      ${field('Payment due', 'project.dueDate', 'date')}
+      <div class="terms-due-cell">
+        <label>Payment terms & due date
+          <div class="terms-split-row">
+            <div class="select-chevron-wrap">
+              <select id="payment-terms-preset" data-field="project.termsPreset">
+  <option value="due_receipt" ${currentTerms === 'due_receipt' ? 'selected' : ''}>Due Now</option>
+  <option value="net_15" ${currentTerms === 'net_15' ? 'selected' : ''}>Net 15</option>
+  <option value="net_30" ${currentTerms === 'net_30' ? 'selected' : ''}>Net 30</option>
+  <option value="net_60" ${currentTerms === 'net_60' ? 'selected' : ''}>Net 60</option>
+  <option value="custom" ${currentTerms === 'custom' ? 'selected' : ''}>Custom</option>
+</select>
+            </div>
+            <input data-field="project.dueDate" type="date" value="${e(getPath('project.dueDate'))}" id="payment-due-input">
+          </div>
+        </label>
+      </div>
       ${area('Client address', 'project.clientAddress')}
     </div>
     <div class="actions">
@@ -186,7 +223,7 @@ function workView() {
         </div>
         <label class="check-pill">
           <input type="checkbox" data-field="labor.${i}.taxable" ${r.taxable ? 'checked' : ''}>
-          Taxable item
+          <span>Taxable item</span>
         </label>
       </div>`).join('') : '<div class="empty">No work logged yet. Add your first shoot day above.</div>'}
     <div class="form-grid" style="margin-top:20px;">
@@ -315,19 +352,19 @@ function invoiceView() {
     <span>Invoice Preview</span>
     <span class="edit-zoom-pill" id="open-zoom-modal">🔍 Tap to View & Edit Full Size</span>
   </div>
-  <div class="preview-viewport-box" id="scaler-viewport">
+  <div class="preview-viewport-box" id="scaler-viewport" title="Tap to expand and edit">
     <div class="preview-scaler-stage" id="scaler-stage">
       <div id="invoice-preview" class="invoice-paper"></div>
     </div>
   </div>
 
-  <!-- Full-Screen Interactive Edit Dialog -->
+  <!-- Full-Screen Safe-Padded Zoom & Edit Modal -->
   <dialog id="invoice-zoom-modal">
     <div class="zoom-modal-header">
       <span>Tap any dashed field to edit</span>
       <button type="button" id="close-zoom-modal" class="primary">Done</button>
     </div>
-    <div class="zoom-modal-body">
+    <div class="zoom-modal-body" id="invoice-modal-backdrop">
       <div id="invoice-modal-content" class="invoice-paper"></div>
     </div>
   </dialog>`;
@@ -345,31 +382,36 @@ function preview() {
   const el = $('#invoice-preview');
   if (!el) return;
 
-  const renderedHTML = renderInvoice(template(), enrichedState(), { editable: true });
-  el.style.setProperty('--invoice-accent', state.invoice.accent || '#a8c3d0');
-  el.innerHTML = renderedHTML;
+  const currentTpl = template();
+  const stateData = enrichedState();
+  const accent = state.invoice.accent || '#a8c3d0';
+
+  el.style.setProperty('--invoice-accent', accent);
+  el.innerHTML = renderInvoice(currentTpl, stateData, { editable: false });
 
   const modalEl = $('#invoice-modal-content');
   if (modalEl) {
-    modalEl.style.setProperty('--invoice-accent', state.invoice.accent || '#a8c3d0');
-    modalEl.innerHTML = renderedHTML;
+    modalEl.style.setProperty('--invoice-accent', accent);
+    modalEl.innerHTML = renderInvoice(currentTpl, stateData, { editable: true });
   }
 
-  // Dynamic proportional scaling to fit viewport
-  const viewport = $('#scaler-viewport');
-  const stage = $('#scaler-stage');
-  if (viewport && stage) {
+  requestAnimationFrame(() => {
+    const viewport = $('#scaler-viewport');
+    const stage = $('#scaler-stage');
+    if (!viewport || !stage) return;
+
     const availableWidth = viewport.clientWidth - 32;
     const baseWidth = 680;
-    if (availableWidth < baseWidth) {
+
+    if (availableWidth > 0 && availableWidth < baseWidth) {
       const scale = availableWidth / baseWidth;
       stage.style.transform = `scale(${scale})`;
-      viewport.style.height = `${stage.offsetHeight * scale + 32}px`;
+      stage.style.marginBottom = `-${(stage.offsetHeight * (1 - scale))}px`;
     } else {
       stage.style.transform = 'none';
-      viewport.style.height = 'auto';
+      stage.style.marginBottom = '0px';
     }
-  }
+  });
 }
 
 window.addEventListener('resize', () => {
@@ -398,7 +440,7 @@ async function go(next) {
 
 function updateField(path, value, element) {
   const old = getPath(path);
-  if (typeof old === 'number' || element.type === 'number') {
+  if (typeof old === 'number' || (element && element.type === 'number')) {
     const max = path === 'project.taxRate' ? 100 : path.endsWith('.quantity') ? 1e6 : 1e12;
     if (!validNumber(value, max)) throw new Error('Enter a valid number.');
     value = Number(value);
@@ -430,8 +472,8 @@ async function loadProject(id) {
 }
 
 async function addPhoto(file) {
-  const full = await compressImage(file, 1024, 0.82);
-  const thumb = await compressImage(file, 400, 0.75);
+  const full = await compressImage(file, 960, 0.80);
+  const thumb = await compressImage(file, 400, 0.72);
   const record = { id: uid(), projectId: state.id, imageFull: full, imageThumbnail: thumb, name: file.name };
   await db.put('receipts', record);
   images.set(record.id, record);
@@ -467,9 +509,15 @@ function download(name, blob) {
 }
 
 async function exportPDF() {
-  if (!state.project.projectTitle.trim() || !state.project.clientName.trim() || !state.contractor.name.trim() || !state.project.invoiceNumber.trim()) {
+  if (
+    !state.project.projectTitle.trim() ||
+    !state.project.clientName.trim() ||
+    !state.contractor.name.trim() ||
+    !state.project.invoiceNumber.trim()
+  ) {
     throw new Error('Please fill in project, client, contractor name, and invoice number before exporting.');
   }
+
   renderBusy = true;
   const button = document.querySelector('[data-action=export]');
   if (button) button.disabled = true;
@@ -478,24 +526,58 @@ async function exportPDF() {
   let root;
   try {
     await save();
-    await document.fonts.load('12px WrapKorean', '영수증 청구서');
-    await document.fonts.ready;
+    try {
+      await document.fonts.load('12px WrapKorean', '영수증 청구서');
+      await document.fonts.ready;
+    } catch {
+      // Custom font fallback
+    }
+
     root = document.createElement('div');
     root.className = 'invoice-paper exporting';
     root.style.setProperty('--invoice-accent', state.invoice.accent || '#a8c3d0');
     root.innerHTML = renderInvoice(template(), enrichedState());
     document.body.append(root);
-    await Promise.all([...root.querySelectorAll('img')].map(img => img.decode()));
-    const filename = (state.project.invoiceNumber || 'WrapSheet').replace(/[^\p{L}\p{N}_-]/gu, '_') + '.pdf';
-    await window.html2pdf().set({
-      margin: 10,
-      filename,
-      image: { type: 'jpeg', quality: 0.96 },
-      html2canvas: { scale: 2, useCORS: false, backgroundColor: '#ffffff', scrollY: 0 },
-      jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
-      pagebreak: { mode: ['css', 'legacy'], avoid: ['tr', 'figure', '.invoice-totals'] }
-    }).from(root).save();
-    if ($('#export-status')) $('#export-status').textContent = 'PDF exported successfully.';
+
+    await Promise.all(
+      [...root.querySelectorAll('img')].map(img => img.decode().catch(() => { }))
+    );
+
+    const filename =
+      (state.project.invoiceNumber || 'WrapSheet').replace(/[^\p{L}\p{N}_-]/gu, '_') + '.pdf';
+
+    await window.html2pdf()
+      .set({
+        margin: [12, 10, 14, 10],
+        filename,
+        image: { type: 'jpeg', quality: 0.98 },
+        html2canvas: {
+          scale: 2,
+          useCORS: true,
+          backgroundColor: '#ffffff',
+          scrollY: 0,
+          windowWidth: 760
+        },
+        jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
+        pagebreak: {
+          mode: ['avoid-all', 'css', 'legacy'],
+          avoid: [
+            'h2',
+            'h1',
+            'tr',
+            'figure',
+            '.invoice-totals',
+            '.invoice-header',
+            '.invoice-footer',
+            '.proof-grid',
+            'p'
+          ]
+        }
+      })
+      .from(root)
+      .save();
+
+    if ($('#export-status')) $('#export-status').textContent = 'PDF exported cleanly.';
   } finally {
     root?.remove();
     renderBusy = false;
@@ -592,7 +674,14 @@ document.addEventListener('click', async event => {
     }
     return;
   }
+
   if (event.target.closest('#close-zoom-modal')) {
+    const modal = $('#invoice-zoom-modal');
+    if (modal) modal.close();
+    return;
+  }
+
+  if (event.target.id === 'invoice-modal-backdrop' || event.target.id === 'invoice-zoom-modal') {
     const modal = $('#invoice-zoom-modal');
     if (modal) modal.close();
     return;
@@ -652,10 +741,45 @@ document.addEventListener('change', async event => {
   const el = event.target;
   try {
     if (el.dataset.field) {
-      updateField(el.dataset.field, el.type === 'checkbox' ? el.checked : el.value, el);
+      const val = el.type === 'checkbox' ? el.checked : el.value;
+      updateField(el.dataset.field, val, el);
+
+      // Auto-compute payment due date based on net terms selection
+      if (el.dataset.field === 'project.termsPreset') {
+        const computed = calculateDueDate(state.project.invoiceDate, val);
+        if (computed) {
+          updateField('project.dueDate', computed, $('#payment-due-input'));
+          const dueInput = $('#payment-due-input');
+          if (dueInput) dueInput.value = computed;
+        }
+      }
+
+      // If user sets a custom date, sync the preset select to 'custom'
+      if (el.dataset.field === 'project.dueDate') {
+        const presetSelect = $('#payment-terms-preset');
+        if (presetSelect && state.project.termsPreset !== 'custom') {
+          const expected = calculateDueDate(state.project.invoiceDate, state.project.termsPreset);
+          if (val !== expected) {
+            updateField('project.termsPreset', 'custom', presetSelect);
+            presetSelect.value = 'custom';
+          }
+        }
+      }
+
+      // If invoice date shifts, recalculate if active preset is dynamic
+      if (el.dataset.field === 'project.invoiceDate' && state.project.termsPreset !== 'custom') {
+        const computed = calculateDueDate(val, state.project.termsPreset || 'net_30');
+        if (computed) {
+          updateField('project.dueDate', computed, $('#payment-due-input'));
+          const dueInput = $('#payment-due-input');
+          if (dueInput) dueInput.value = computed;
+        }
+      }
+
       if (tab === 'invoice') preview();
       return;
     }
+
     if (['camera-input', 'receipt-input', 'logo-input', 'template-input'].includes(el.id)) {
       const files = [...el.files];
       if (el.id === 'camera-input' || el.id === 'receipt-input') {

@@ -1,71 +1,64 @@
 import { validNumber, validDate } from './model.js';
 
-/**
- * Optimizes the image for rapid mobile OCR transmission.
- * 960px provides crisp character fidelity while cutting payload size by ~60%.
- */
-export async function compressImage(file, max = 960, quality = 0.78) {
+export async function compressImage(file, max = 960, quality = 0.80) {
   if (!/^image\/(jpeg|png|webp|gif|heic|heif|avif)$/.test(file.type)) {
-    throw new Error('Choose a photo (JPEG, PNG, WebP, or camera photo). PDF receipts must be uploaded as a screenshot.');
+    throw new Error('Choose an image file (JPEG, PNG, WebP).');
   }
-  if (file.size > 25 * 1024 * 1024) throw new Error('Photo exceeds 25 MB.');
+  if (file.size > 25 * 1024 * 1024) {
+    throw new Error('Image exceeds 25 MB. Please choose a smaller photo.');
+  }
 
   const url = URL.createObjectURL(file);
   const img = new Image();
+
   try {
     img.src = url;
     await img.decode();
-    if (img.naturalWidth * img.naturalHeight > 80000000) throw new Error('Image dimensions are too large.');
 
     const scale = Math.min(1, max / Math.max(img.naturalWidth, img.naturalHeight));
     const canvas = document.createElement('canvas');
     canvas.width = Math.max(1, Math.round(img.naturalWidth * scale));
     canvas.height = Math.max(1, Math.round(img.naturalHeight * scale));
+
     const ctx = canvas.getContext('2d');
     ctx.fillStyle = '#ffffff';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+
     return canvas.toDataURL('image/jpeg', quality);
   } catch (e) {
-    throw new Error(`Cannot process photo: ${e.message}`);
+    throw new Error(`Cannot process this photo: ${e.message}`);
   } finally {
     URL.revokeObjectURL(url);
   }
 }
 
-/**
- * Normalizes Korean/international date strings (e.g. 2026.09.11, 26/9/11, 2026년 9월 11일) to YYYY-MM-DD
- */
 function normalizeDate(raw) {
-  if (!raw || typeof raw !== 'string') return '';
-  const str = raw.trim().replace(/[년월]/g, '-').replace(/[일\.]/g, '-').replace(/\//g, '-').replace(/\s+/g, '');
-  const match = str.match(/(\d{2,4})-(\d{1,2})-(\d{1,2})/);
+  if (!raw) return '';
+  const clean = raw.trim().replace(/[./\s]/g, '-').replace(/[年月]/g, '-').replace(/[일]/g, '');
+  const match = clean.match(/(\d{2,4})-(\d{1,2})-(\d{1,2})/);
   if (!match) return '';
   let [_, y, m, d] = match;
   if (y.length === 2) y = `20${y}`;
-  m = m.padStart(2, '0');
-  d = d.padStart(2, '0');
-  const formatted = `${y}-${m}-${d}`;
-  return validDate(formatted) ? formatted : '';
+  const iso = `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
+  return validDate(iso) ? iso : '';
 }
 
 export async function parseReceiptImage(image, key, currency, fetcher = fetch) {
-  if (!key) throw new Error('Add your Gemini API key in Settings before scanning.');
+  if (!key) {
+    throw new Error('Add your Gemini API key in Settings, or enter receipt details manually.');
+  }
 
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 35000);
+  const timer = setTimeout(() => controller.abort(), 20000);
 
-  const promptText = `Extract data from this Korean/English physical or digital receipt slip.
-Rules:
-1. Vendor: Exact business/store name in its original language (e.g. GS25, CU, 스타벅스, 다이소, 파리바게뜨).
-2. Date: Exact transaction date printed on the slip. Convert whatever format is on the slip to YYYY-MM-DD. Never return today's date if another date is visible.
-3. Total: Final amount paid (numbers only).
-4. VAT: Included tax/VAT (0 if none or unstated).
-5. Category: Choose strictly from: "Meals/Catering", "Coffee/Craft", "Transport/Gas/Parking", "Gear/Expendables", "Courier/Post", "Lodging", "Other".
-   - Convenience stores, bakeries, snacks -> "Coffee/Craft" or "Meals/Catering"
-   - Taxis, fuel, tolls, parking -> "Transport/Gas/Parking"
-   - Hardware, tape, office/photo supplies -> "Gear/Expendables"
-6. Warning: Note any unreadable fields or leave blank if clean.`;
+  const prompt = `You are a film production accounting assistant. Extract data from this Korean or English receipt.
+- Vendor: Merchant/Store name.
+- Date: Date of transaction in YYYY-MM-DD. Normalize YY.MM.DD or YYYY년 MM월 DD일.
+- Total: Final amount paid including VAT.
+- VAT: Extracted VAT/부가세 amount (0 if not indicated).
+- Category: Pick exactly one: "Meals/Catering", "Coffee/Craft", "Transport/Gas/Parking", "Gear/Expendables", "Courier/Post", "Lodging", or "Other".
+- Currency: 3-letter ISO code (default to "${currency || 'KRW'}").`;
 
   try {
     const response = await fetcher('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent', {
@@ -78,12 +71,11 @@ Rules:
       body: JSON.stringify({
         contents: [{
           parts: [
-            { text: promptText },
+            { text: prompt },
             { inlineData: { mimeType: 'image/jpeg', data: image.split(',')[1] } }
           ]
         }],
         generationConfig: {
-          temperature: 0.1,
           responseMimeType: 'application/json',
           responseSchema: {
             type: 'OBJECT',
@@ -92,53 +84,45 @@ Rules:
               date: { type: 'STRING' },
               total: { type: 'NUMBER', nullable: true },
               vat: { type: 'NUMBER', nullable: true },
-              currency: { type: 'STRING' },
               category: { type: 'STRING' },
+              currency: { type: 'STRING' },
               warning: { type: 'STRING' }
             },
-            required: ['vendor', 'date', 'total', 'vat', 'currency', 'category', 'warning']
+            required: ['vendor', 'date', 'total', 'vat', 'category', 'currency']
           }
         }
       })
     });
 
     if (!response.ok) {
-      const messages = {
-        400: 'The scan request was rejected. Check your API key and image format.',
-        401: 'Invalid API key. Check Google AI Studio.',
-        403: 'This API key lacks permission. Check Google AI Studio.',
-        404: 'Gemini 2.5 Flash is unavailable for this key region.',
-        429: 'Gemini quota reached. Wait a minute and retry.'
+      const msgs = {
+        400: 'Invalid request or model configuration.',
+        401: 'API key is invalid. Please check Settings.',
+        403: 'API key does not have permission for Gemini 2.5 Flash.',
+        429: 'Gemini rate limit reached. Please wait a moment.'
       };
-      throw new Error(messages[response.status] || `Gemini scan failed (${response.status}).`);
+      throw new Error(msgs[response.status] || `OCR scan error (${response.status}).`);
     }
 
     const data = await response.json();
-    const text = data.candidates?.[0]?.content?.parts?.filter(p => p.text && !p.thought).map(p => p.text).join('');
-    if (!text) throw new Error('Unreadable receipt photo. Please enter details manually.');
+    const text = data.candidates?.[0]?.content?.parts?.find(p => p.text)?.text;
+    if (!text) throw new Error('No receipt text extracted.');
 
-    let r;
-    try { r = JSON.parse(text); } catch { throw new Error('Malformed receipt response. Please enter manually.'); }
-
-    const parsedDate = normalizeDate(r.date);
+    const parsed = JSON.parse(text);
+    const dateFormatted = normalizeDate(parsed.date);
 
     return {
-      vendor: (r.vendor || 'Expense').slice(0, 300),
-      date: parsedDate,
-      total: r.total ?? '',
-      vat: r.vat ?? 0,
-      currency: typeof r.currency === 'string' && r.currency ? r.currency.toUpperCase() : currency,
-      category: r.category || 'Gear/Expendables',
-      warning: [
-        r.warning || '',
-        !parsedDate ? 'Check transaction date.' : '',
-        r.total === null ? 'Amount unreadable.' : ''
-      ].filter(Boolean).join(' ')
+      vendor: (parsed.vendor || '').slice(0, 200),
+      date: dateFormatted,
+      total: typeof parsed.total === 'number' && validNumber(parsed.total) ? parsed.total : '',
+      vat: typeof parsed.vat === 'number' && validNumber(parsed.vat) ? parsed.vat : 0,
+      category: parsed.category || 'Other',
+      currency: (parsed.currency || currency || 'KRW').toUpperCase(),
+      warning: parsed.warning || (!dateFormatted ? 'Verify receipt date.' : '')
     };
-  } catch (e) {
-    if (e.name === 'AbortError') throw new Error('Scan timed out. Please retry or enter manually.');
-    if (e instanceof TypeError) throw new Error('Network error. Check your connection.');
-    throw e;
+  } catch (err) {
+    if (err.name === 'AbortError') throw new Error('OCR scan timed out. Try again or enter manually.');
+    throw err;
   } finally {
     clearTimeout(timer);
   }

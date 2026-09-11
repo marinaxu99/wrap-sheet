@@ -69,8 +69,8 @@ button:disabled {
   cursor: not-allowed;
 }
 
-/* Uniform Form Inputs with iOS Datepicker Normalization */
-input,
+/* Base Uniform Form Inputs (Excluding checkboxes) */
+input:not([type="checkbox"]):not([type="radio"]),
 select,
 textarea {
   display: block;
@@ -86,20 +86,83 @@ textarea {
 }
 
 /* Fix iOS date input height blowout */
+/* Fix iOS & WebKit date input alignment */
+/* ==========================================================================
+   DATE INPUT ALIGNMENT & TERMS SPLIT ROW
+   ========================================================================== */
+
+/* 1. Date Input Alignment & Safari Opacity Fix */
 input[type="date"] {
   min-height: 44px;
   height: 44px;
-  line-height: 44px;
-  padding-top: 0;
-  padding-bottom: 0;
+  line-height: normal;
+  padding: 0 14px;
+  display: flex;
+  align-items: center;
+  color: var(--text) !important;
+  -webkit-text-fill-color: var(--text) !important;
+  opacity: 1 !important;
 }
 
 input[type="date"]::-webkit-date-and-time-value {
   text-align: left;
-  line-height: 44px;
-  min-height: 44px;
+  line-height: normal;
+  min-height: 0;
   margin: 0;
   padding: 0;
+}
+
+/* 2. Side-by-Side Terms Dropdown + Due Date Row */
+.terms-due-cell {
+  width: 100%;
+}
+
+.terms-split-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-top: 6px;
+  width: 100%;
+}
+
+/* Dropdown Arrow/Chevron */
+.select-chevron-wrap {
+  position: relative;
+  flex: 0 0 115px;
+  min-width: 105px;
+}
+
+.select-chevron-wrap select {
+  margin: 0 !important;
+  padding-right: 28px !important;
+  text-overflow: ellipsis;
+  cursor: pointer;
+  background-image: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="%238b979f" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>');
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  background-size: 11px;
+}
+
+/* Matching 44px height for the due date picker */
+.terms-split-row input[type="date"] {
+  flex: 1;
+  margin: 0 !important;
+  min-width: 0;
+  height: 44px !important;
+  min-height: 44px !important;
+}
+
+/* Maintain side-by-side row on mobile */
+@media (max-width: 760px) {
+  .terms-split-row {
+    display: flex !important;
+    flex-direction: row !important;
+    gap: 8px !important;
+  }
+
+  .select-chevron-wrap {
+    flex: 0 0 105px !important;
+  }
 }
 
 textarea {
@@ -127,7 +190,7 @@ label {
   margin-bottom: 8px;
 }
 
-label input,
+label input:not([type="checkbox"]),
 label select,
 label textarea {
   margin-top: 6px;
@@ -156,7 +219,8 @@ dialog {
 }
 
 dialog::backdrop {
-  background: #000a;
+  background: rgba(0, 0, 0, 0.75);
+  backdrop-filter: blur(4px);
 }
 
 
@@ -485,28 +549,41 @@ h1 span {
   background: #3d2323;
 }
 
+/* Fixed Taxable Toggle Button Pill */
 .check-pill {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   background: #181b1d;
   border: 1px solid var(--line);
   padding: 8px 14px;
   border-radius: 8px;
   cursor: pointer;
-  margin-top: 12px;
+  margin-top: 14px;
   font-size: 12px;
   font-weight: 500;
   color: var(--text);
   width: fit-content;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
-.check-pill input {
-  width: 16px;
-  min-height: 16px;
-  height: 16px;
-  margin: 0;
+.check-pill:hover {
+  border-color: var(--accent);
+  background: #1e2225;
+}
+
+.check-pill input[type="checkbox"] {
+  width: 18px !important;
+  min-height: 18px !important;
+  height: 18px !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  cursor: pointer;
   accent-color: var(--accent);
+  -webkit-appearance: checkbox;
+  appearance: checkbox;
+  display: inline-block !important;
 }
 
 /* Receipts */
@@ -697,7 +774,7 @@ footer {
 
 
 /* ==========================================================================
-   SECTION 4: INVOICE SHEET & EDITABLE CALLOUTS
+   SECTION 4: INVOICE SHEET & PDF EXPORT
    ========================================================================== */
 
 .swatch-group {
@@ -770,7 +847,6 @@ footer {
   flex: 1.2;
 }
 
-/* Prompt Banner */
 .preview-prompt-bar {
   display: flex;
   justify-content: space-between;
@@ -801,16 +877,17 @@ footer {
   gap: 6px;
 }
 
-/* Scaler Viewport */
 .preview-viewport-box {
   width: 100%;
-  background: #0b0d0e;
+  background: #101214;
   border: 1px solid var(--line);
   border-radius: 12px;
-  overflow: hidden;
-  padding: 16px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 20px 16px;
   display: flex;
   justify-content: center;
+  align-items: flex-start;
   cursor: pointer;
   box-sizing: border-box;
 }
@@ -818,10 +895,10 @@ footer {
 .preview-scaler-stage {
   width: 680px;
   transform-origin: top center;
-  transition: transform 0.2s ease;
+  flex-shrink: 0;
+  transition: transform 0.15s ease;
 }
 
-/* The Paper Sheet */
 .invoice-paper {
   background: #ffffff;
   color: #1a1a1a;
@@ -834,21 +911,29 @@ footer {
   border-radius: 4px;
 }
 
-/* Clearly Marked Editable Text Target */
-[contenteditable="true"],
-.invoice-paper [data-edit] {
-  outline: 1px dashed rgba(168, 195, 208, 0.6) !important;
+#scaler-viewport .invoice-paper {
+  pointer-events: none;
+}
+
+#scaler-viewport .invoice-paper [data-edit] {
+  outline: none !important;
+  background: transparent !important;
+}
+
+#invoice-modal-content [contenteditable="true"],
+#invoice-modal-content [data-edit] {
+  outline: 1px dashed rgba(168, 195, 208, 0.75) !important;
   outline-offset: 2px;
   border-radius: 2px;
   cursor: text;
-  background: rgba(168, 195, 208, 0.08);
+  background: rgba(168, 195, 208, 0.12);
   padding: 1px 4px;
 }
 
-[contenteditable="true"]:focus,
-.invoice-paper [data-edit]:focus {
+#invoice-modal-content [contenteditable="true"]:focus,
+#invoice-modal-content [data-edit]:focus {
   outline: 2px solid var(--accent) !important;
-  background: rgba(168, 195, 208, 0.18);
+  background: rgba(168, 195, 208, 0.22);
 }
 
 .invoice-paper .invoice-header {
@@ -876,13 +961,14 @@ footer {
   color: #444;
 }
 
+/* html2pdf-safe border without color-mix */
 .invoice-paper h2 {
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 1px;
   text-transform: uppercase;
   margin: 22px 0 10px;
-  border-bottom: 1.5px solid color-mix(in srgb, var(--invoice-accent, #a8c3d0) 60%, #1a1a1a);
+  border-bottom: 2px solid var(--invoice-accent, #a8c3d0);
   padding-bottom: 6px;
   color: #111;
 }
@@ -893,8 +979,9 @@ footer {
   margin: 12px 0;
 }
 
+/* html2pdf-safe table background */
 .invoice-paper th {
-  background: color-mix(in srgb, var(--invoice-accent, #a8c3d0) 12%, #f4f5f6);
+  background: #f2f5f7;
   color: #222;
   font-size: 10px;
   text-transform: uppercase;
@@ -930,8 +1017,9 @@ footer {
   font-size: 11px;
 }
 
+/* html2pdf-safe total card */
 .invoice-paper .amount-due {
-  background: color-mix(in srgb, var(--invoice-accent, #a8c3d0) 18%, #f7f9fa);
+  background: #edf2f5;
   border-top: 2px solid var(--invoice-accent, #a8c3d0);
   margin-top: 8px;
   padding: 10px 8px !important;
@@ -961,7 +1049,7 @@ dialog#invoice-zoom-modal {
   max-height: 100dvh;
   border: 0;
   border-radius: 0;
-  background: #141618;
+  background: transparent;
   padding: 0;
   margin: 0;
   overflow: hidden;
@@ -985,6 +1073,7 @@ dialog#invoice-zoom-modal[open] {
   justify-content: space-between;
   align-items: center;
   z-index: 100;
+  flex-shrink: 0;
 }
 
 .zoom-modal-header span {
@@ -1002,13 +1091,24 @@ dialog#invoice-zoom-modal[open] {
 
 .zoom-modal-body {
   flex: 1;
-  overflow: auto;
+  overflow-y: auto;
+  overflow-x: auto;
   -webkit-overflow-scrolling: touch;
-  padding: 20px 16px calc(40px + env(safe-area-inset-bottom));
+  padding: 24px 16px calc(50px + env(safe-area-inset-bottom));
   display: flex;
   justify-content: center;
-  background: #0d0f10;
+  align-items: flex-start;
+  background: rgba(13, 15, 16, 0.95);
+  cursor: pointer;
 }
+
+.zoom-modal-body>.invoice-paper {
+  cursor: default;
+}
+
+/* ==========================================================================
+   PAGE-BREAK RULES FOR CLEAN PDF EXPORTS
+   ========================================================================== */
 
 .exporting {
   width: 760px !important;
@@ -1016,10 +1116,33 @@ dialog#invoice-zoom-modal[open] {
   transform: none !important;
 }
 
+.exporting h1,
+.exporting h2,
+.exporting h3,
+.exporting .invoice-header,
+.exporting .invoice-totals,
+.exporting .invoice-footer,
 .exporting tr,
 .exporting figure,
-.exporting .invoice-totals {
-  break-inside: avoid;
+.exporting .proof-grid,
+.exporting .receipt-card,
+.exporting .section-block,
+.exporting [data-section] {
+  break-inside: avoid !important;
+  page-break-inside: avoid !important;
+  -webkit-column-break-inside: avoid !important;
+}
+
+.exporting h2 {
+  break-after: avoid !important;
+  page-break-after: avoid !important;
+}
+
+.exporting p,
+.exporting td,
+.exporting th {
+  break-inside: avoid !important;
+  page-break-inside: avoid !important;
 }
 
 
@@ -1048,7 +1171,7 @@ dialog#invoice-zoom-modal[open] {
     -webkit-user-select: none;
   }
 
-  input,
+  input:not([type="checkbox"]):not([type="radio"]),
   select,
   textarea,
   [contenteditable] {
@@ -1057,7 +1180,6 @@ dialog#invoice-zoom-modal[open] {
     font-size: 16px !important;
   }
 
-  /* Topbar with Safe Area (No Dynamic Island overlapping) */
   .topbar {
     min-height: calc(56px + env(safe-area-inset-top));
     height: auto;
@@ -1140,6 +1262,8 @@ dialog#invoice-zoom-modal[open] {
     order: 3;
     display: block;
     width: 100%;
+    margin-bottom: calc(90px + env(safe-area-inset-bottom));
+    /* Prevents bottom dock from covering inputs */
   }
 
   #view {
@@ -1157,7 +1281,6 @@ dialog#invoice-zoom-modal[open] {
     gap: 14px;
   }
 
-  /* Mobile Floating Dock Bar: Safe-Area-Aware */
   .summary {
     position: fixed !important;
     bottom: 0 !important;
