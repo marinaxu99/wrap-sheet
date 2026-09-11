@@ -1,9 +1,127 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-title" content="WrapSheet"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="theme-color" content="#1E1E1E"><meta name="description" content="Your work, receipts, and invoice. Wrapped."><title>WrapSheet — That's a wrap.</title><link rel="manifest" href="./manifest.json"><link rel="icon" href="./icon.svg"><link rel="apple-touch-icon" href="./icon-192.png"><link rel="stylesheet" href="./style.css"><script defer src="./vendor/html2pdf.bundle.min.js"></script><script type="module" src="./app.js"></script></head>
-<body><header class="topbar"><a class="brand" href="#project"><span class="mark">W<span>▰</span></span>WrapSheet<span class="beta">FIELD EDITION / 01</span></a><div class="top-actions"><span id="network" class="status">● Online</span><button id="install-button" class="quiet">Install app ↓</button><button id="settings-button" class="quiet">Settings ↗</button></div></header>
-<main><div class="masthead"><div><div class="eyebrow">FROM LAST TAKE TO LAST RECEIPT</div><h1>That's a wrap<span>.</span></h1><p>Your work. Your receipts. One clean invoice.</p></div><div class="project-picker"><label for="project-picker">YOUR WORKSPACE</label><div class="inline"><select id="project-picker" aria-label="Current project"></select><button id="new-project" title="New project" aria-label="New project">＋</button></div><span id="save-status" role="status">Opening local workspace…</span></div></div>
-<nav class="steps" aria-label="Workspace steps"><button data-tab="project"><span>01</span> Project <i>↗</i></button><button data-tab="work"><span>02</span> Work <i>↗</i></button><button data-tab="receipts"><span>03</span> Receipts <i>↗</i></button><button data-tab="invoice"><span>04</span> Invoice <i>↗</i></button></nav>
-<div id="message" role="alert" hidden></div><div class="workspace"><section id="view" aria-live="polite"></section><aside class="summary"><div class="eyebrow">THE WRAP / LIVE TOTALS</div><h2 id="summary-name">Untitled production</h2><div class="rule"></div><div class="sum-row"><span>Work & equipment</span><strong id="labor-total">₩0</strong></div><div class="sum-row"><span>Labor tax <small id="tax-percent"></small></span><strong id="tax-total">₩0</strong></div><div class="sum-row"><span>Verified expenses</span><strong id="expense-total">₩0</strong></div><div class="total"><span>TOTAL DUE</span><strong id="grand-total">₩0</strong></div><p id="receipt-status">No receipts yet</p><button class="primary wide" data-go="invoice">Review invoice <span>↗</span></button><div class="local-note"><span>◉</span><p>Made for the field.<br><small>Autosaved on this device. Ready offline.</small></p></div></aside></div>
-<footer><span>WRAPSHEET <small> / LESS ADMIN. MORE MAKING.</small></span><span>LOCAL FIRST · CREW BUILT</span></footer></main>
-<dialog id="settings"><form id="settings-form"><div class="section-head"><h2>Your settings</h2><button type="button" id="close-settings" aria-label="Close settings">×</button></div><p>Receipt recognition runs only when you choose “Scan with Gemini”. Your compressed photo is sent to Google.</p><label>Gemini API key<input id="api-key" type="password" autocomplete="off" placeholder="Paste your Google AI Studio key"></label><p class="hint">Stored in this browser only. Anyone with access to this browser can access the key. Never put a shared key in deployed source.</p><button class="primary" type="submit">Save settings</button><button type="button" id="clear-key">Remove key</button></form></dialog>
-<dialog id="install-dialog"><div class="section-head"><h2>WrapSheet on your phone</h2><button id="close-install" aria-label="Close install instructions">×</button></div><p id="install-context"></p><p><strong>iPhone / iPad</strong><br>Open this address in Safari. Tap Share → Add to Home Screen. Keep “Open as Web App” enabled if shown, then tap Add.</p><p><strong>Android</strong><br>Open this address in Chrome. Tap the menu → Install app or Add to Home screen.</p><p id="offline-ready" role="status">Checking offline readiness…</p><p class="hint">Open the installed app once while connected before taking it on set. Receipt scanning needs internet and your own Gemini key. Projects are stored separately on each device.</p></dialog><script type="module" src="./install.js"></script><noscript>WrapSheet needs JavaScript to store projects and create invoices.</noscript></body></html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-title" content="WrapSheet">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="theme-color" content="#1E1E1E">
+    <meta name="description" content="Log shoot days, scan receipts, and generate an audit-ready invoice.">
+    <title>WrapSheet — Ready for wrap.</title>
+    <link rel="manifest" href="./manifest.json">
+    <link rel="icon" href="./icon.svg">
+    <link rel="apple-touch-icon" href="./icon-192.png">
+    <link rel="stylesheet" href="./style.css">
+    <script defer src="./vendor/html2pdf.bundle.min.js"></script>
+    <script type="module" src="./app.js"></script>
+</head>
+
+<body>
+    <header class="topbar">
+        <a class="brand" href="#project">
+            <span class="mark">W</span>
+            WrapSheet
+            <span class="beta">FIELD EDITION</span>
+        </a>
+        <div class="top-actions">
+            <span id="network" class="status">● Online</span>
+            <button id="install-button" class="quiet">Install ↓</button>
+            <button id="settings-button" class="quiet">Settings ↗</button>
+        </div>
+    </header>
+
+    <main>
+        <!-- Welcome Masthead & Balanced Project Header -->
+        <div class="masthead">
+            <div class="masthead-copy">
+                <div class="eyebrow">FIELD WRAP ENGINE</div>
+                <h1>Ready for wrap<span>.</span></h1>
+                <p>Log shoot days, scan receipts, and export an audit-ready invoice.</p>
+            </div>
+
+            <div class="project-picker">
+                <div class="picker-header">
+                    <label for="project-picker">CURRENT SHOOT</label>
+                    <span id="save-status" role="status">● Autosaved</span>
+                </div>
+                <div class="inline">
+                    <select id="project-picker" aria-label="Current shoot"></select>
+                    <button id="new-project" class="action-btn" title="Create a new shoot">＋ New Shoot</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Clean Step Navigation -->
+        <nav class="steps" aria-label="Workspace steps">
+            <button data-tab="project"><span>01</span> Project</button>
+            <button data-tab="work"><span>02</span> Work</button>
+            <button data-tab="receipts"><span>03</span> Receipts</button>
+            <button data-tab="invoice"><span>04</span> Invoice</button>
+        </nav>
+
+        <div id="message" role="alert" hidden></div>
+
+        <!-- Main Workspace -->
+        <div class="workspace">
+            <section id="view" aria-live="polite"></section>
+
+            <!-- Desktop Sidebar / Mobile Floating Dock -->
+            <aside class="summary">
+                <div class="eyebrow">LIVE WRAP SUMMARY</div>
+                <h2 id="summary-name">Untitled production</h2>
+                <div class="rule"></div>
+                <div class="sum-row"><span>Work & equipment</span><strong id="labor-total">₩0</strong></div>
+                <div class="sum-row"><span>Labor tax <small id="tax-percent"></small></span><strong
+                        id="tax-total">₩0</strong></div>
+                <div class="sum-row"><span>Reimbursable receipts</span><strong id="expense-total">₩0</strong></div>
+                <div class="total">
+                    <span>TOTAL DUE</span>
+                    <strong id="grand-total">₩0</strong>
+                </div>
+                <p id="receipt-status">Ready when you are</p>
+                <button id="primary-action-btn" class="primary wide">Next: Add Work →</button>
+                <div class="local-note">
+                    <span>◉</span>
+                    <p>Local-First Storage<br><small>Autosaved on device. Offline ready.</small></p>
+                </div>
+            </aside>
+        </div>
+
+        <footer>
+            <span>WRAPSHEET <small> / LESS ADMIN. MORE CRAFT.</small></span>
+            <span>LOCAL FIRST · BUILT FOR CREW</span>
+        </footer>
+    </main>
+
+    <dialog id="settings">
+        <form id="settings-form">
+            <div class="section-head">
+                <h2>Settings</h2>
+                <button type="button" id="close-settings" aria-label="Close settings">×</button>
+            </div>
+            <p>Receipt OCR runs via the Gemini Flash API. Your images stay locally on your device until scanned.</p>
+            <label>Gemini API Key
+                <input id="api-key" type="password" autocomplete="off" placeholder="Paste your Google AI Studio key">
+            </label>
+            <p class="hint">Saved in browser storage only. Never sent to GitHub or shared servers.</p>
+            <button class="primary" type="submit">Save settings</button>
+            <button type="button" id="clear-key">Remove key</button>
+        </form>
+    </dialog>
+
+    <dialog id="install-dialog">
+        <div class="section-head">
+            <h2>Install WrapSheet</h2>
+            <button id="close-install" aria-label="Close install instructions">×</button>
+        </div>
+        <p><strong>iOS Safari:</strong> Tap Share → Add to Home Screen.<br><strong>Android Chrome:</strong> Tap Menu (⋮)
+            → Install app.</p>
+    </dialog>
+
+    <script type="module" src="./install.js"></script>
+    <noscript>WrapSheet requires JavaScript to operate.</noscript>
+</body>
+
+</html>
