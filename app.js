@@ -272,7 +272,6 @@ function invoiceView() {
         </div>
       </div>
 
-      <!-- High-Contrast Asset Customization Deck -->
       <div class="deck-row">
         <label class="file-button deck-btn">
           <svg class="btn-icon" viewBox="0 0 24 24"><path d="M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z"/></svg>
@@ -287,7 +286,6 @@ function invoiceView() {
           <input type="file" id="template-input" accept=".html,text/html">
         </label>
       </div>
-      <p class="hint" style="margin-top: 6px;"><a href="./example-template.html" download style="color:var(--accent); text-decoration: none;">Download starter HTML template ↗</a></p>
 
       <details style="margin-top: 16px;">
         <summary>Labels & sections</summary>
@@ -313,7 +311,27 @@ function invoiceView() {
       </button>
     </div>
     <p id="export-status" role="status" class="hint"></p>`) +
-    `<div class="preview-wrap"><div id="invoice-preview" class="invoice-paper"></div></div>`;
+    `<!-- Proportional Scaled Viewport -->
+  <div class="preview-prompt-bar">
+    <span>Invoice Preview</span>
+    <span class="edit-zoom-pill" id="open-zoom-modal">Tap to View & Edit Full Size</span>
+  </div>
+  <div class="preview-viewport-box" id="scaler-viewport">
+    <div class="preview-scaler-stage" id="scaler-stage">
+      <div id="invoice-preview" class="invoice-paper"></div>
+    </div>
+  </div>
+
+  <!-- Full-Screen Interactive Edit Dialog -->
+  <dialog id="invoice-zoom-modal">
+    <div class="zoom-modal-header">
+      <span>Edit Invoice Live</span>
+      <button type="button" id="close-zoom-modal" class="primary">Done</button>
+    </div>
+    <div class="zoom-modal-body">
+      <div id="invoice-modal-content" class="invoice-paper"></div>
+    </div>
+  </dialog>`;
 }
 
 function enrichedState() {
@@ -325,10 +343,39 @@ function template() {
 }
 
 function preview() {
-  if (!$('#invoice-preview')) return;
-  $('#invoice-preview').style.setProperty('--invoice-accent', state.invoice.accent || '#a8c3d0');
-  $('#invoice-preview').innerHTML = renderInvoice(template(), enrichedState(), { editable: true });
+  const el = $('#invoice-preview');
+  if (!el) return;
+
+  const renderedHTML = renderInvoice(template(), enrichedState(), { editable: true });
+  el.style.setProperty('--invoice-accent', state.invoice.accent || '#a8c3d0');
+  el.innerHTML = renderedHTML;
+
+  const modalEl = $('#invoice-modal-content');
+  if (modalEl) {
+    modalEl.style.setProperty('--invoice-accent', state.invoice.accent || '#a8c3d0');
+    modalEl.innerHTML = renderedHTML;
+  }
+
+  // Dynamic proportional scaling to fit viewport
+  const viewport = $('#scaler-viewport');
+  const stage = $('#scaler-stage');
+  if (viewport && stage) {
+    const availableWidth = viewport.clientWidth - 16;
+    const baseWidth = 680;
+    if (availableWidth < baseWidth) {
+      const scale = availableWidth / baseWidth;
+      stage.style.transform = `scale(${scale})`;
+      stage.parentElement.style.height = `${stage.offsetHeight * scale + 32}px`;
+    } else {
+      stage.style.transform = 'none';
+      stage.parentElement.style.height = 'auto';
+    }
+  }
 }
+
+window.addEventListener('resize', () => {
+  if (tab === 'invoice') preview();
+});
 
 function render() {
   if (!state) return;
@@ -536,6 +583,22 @@ Total Due: ${money(t.total, c)}`;
 
 document.addEventListener('click', async event => {
   const b = event.target.closest('button');
+
+  // Full-Screen Zoom Modal Interactions
+  if (event.target.closest('#scaler-viewport') || event.target.closest('#open-zoom-modal')) {
+    const modal = $('#invoice-zoom-modal');
+    if (modal) {
+      modal.showModal();
+      preview();
+    }
+    return;
+  }
+  if (event.target.closest('#close-zoom-modal')) {
+    const modal = $('#invoice-zoom-modal');
+    if (modal) modal.close();
+    return;
+  }
+
   if (!b) return;
 
   if (b.dataset.setColor) {
