@@ -6,7 +6,6 @@ import { compressImage, parseReceiptImage } from './receipt.js';
 const $ = s => document.querySelector(s);
 let state, projects = [], templates = [], images = new Map(), tab = 'project', saveChain = Promise.resolve(), revision = 0, scanBusy = false, renderBusy = false;
 
-// 5 Curated Cinema Palettes
 const SWATCHES = [
   { name: 'Arki Slate', color: '#a8c3d0' },
   { name: 'Kodak Amber', color: '#d4a373' },
@@ -295,7 +294,7 @@ function invoiceView() {
       </details>
     </div>
 
-    <!-- Redesigned High-Utility Action Bar -->
+    <!-- Action Bar -->
     <div class="actions invoice-action-bar">
       <button class="primary" data-action="export">
         <svg class="btn-icon" viewBox="0 0 24 24"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>
@@ -314,7 +313,7 @@ function invoiceView() {
     `<!-- Proportional Scaled Viewport -->
   <div class="preview-prompt-bar">
     <span>Invoice Preview</span>
-    <span class="edit-zoom-pill" id="open-zoom-modal">Tap to View & Edit Full Size</span>
+    <span class="edit-zoom-pill" id="open-zoom-modal">🔍 Tap to View & Edit Full Size</span>
   </div>
   <div class="preview-viewport-box" id="scaler-viewport">
     <div class="preview-scaler-stage" id="scaler-stage">
@@ -325,7 +324,7 @@ function invoiceView() {
   <!-- Full-Screen Interactive Edit Dialog -->
   <dialog id="invoice-zoom-modal">
     <div class="zoom-modal-header">
-      <span>Edit Invoice Live</span>
+      <span>Tap any dashed field to edit</span>
       <button type="button" id="close-zoom-modal" class="primary">Done</button>
     </div>
     <div class="zoom-modal-body">
@@ -360,15 +359,15 @@ function preview() {
   const viewport = $('#scaler-viewport');
   const stage = $('#scaler-stage');
   if (viewport && stage) {
-    const availableWidth = viewport.clientWidth - 16;
+    const availableWidth = viewport.clientWidth - 32;
     const baseWidth = 680;
     if (availableWidth < baseWidth) {
       const scale = availableWidth / baseWidth;
       stage.style.transform = `scale(${scale})`;
-      stage.parentElement.style.height = `${stage.offsetHeight * scale + 32}px`;
+      viewport.style.height = `${stage.offsetHeight * scale + 32}px`;
     } else {
       stage.style.transform = 'none';
-      stage.parentElement.style.height = 'auto';
+      viewport.style.height = 'auto';
     }
   }
 }
@@ -431,7 +430,8 @@ async function loadProject(id) {
 }
 
 async function addPhoto(file) {
-  const full = await compressImage(file), thumb = await compressImage(file, 500, .78);
+  const full = await compressImage(file, 1024, 0.82);
+  const thumb = await compressImage(file, 400, 0.75);
   const record = { id: uid(), projectId: state.id, imageFull: full, imageThumbnail: thumb, name: file.name };
   await db.put('receipts', record);
   images.set(record.id, record);
@@ -445,7 +445,7 @@ async function scan(id) {
   if (!navigator.onLine) throw new Error('Offline. Connect to run scan.');
   scanBusy = true;
   render();
-  message('Scanning with Gemini…');
+  message('Scanning with Gemini Flash…');
   try {
     const result = await parseReceiptImage(images.get(r.receiptId).imageFull, setting('apiKey'), state.project.currency);
     Object.assign(r, result, { verified: false });
@@ -490,7 +490,7 @@ async function exportPDF() {
     await window.html2pdf().set({
       margin: 10,
       filename,
-      image: { type: 'jpeg', quality: .96 },
+      image: { type: 'jpeg', quality: 0.96 },
       html2canvas: { scale: 2, useCORS: false, backgroundColor: '#ffffff', scrollY: 0 },
       jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
       pagebreak: { mode: ['css', 'legacy'], avoid: ['tr', 'figure', '.invoice-totals'] }
@@ -584,7 +584,6 @@ Total Due: ${money(t.total, c)}`;
 document.addEventListener('click', async event => {
   const b = event.target.closest('button');
 
-  // Full-Screen Zoom Modal Interactions
   if (event.target.closest('#scaler-viewport') || event.target.closest('#open-zoom-modal')) {
     const modal = $('#invoice-zoom-modal');
     if (modal) {
@@ -663,7 +662,7 @@ document.addEventListener('change', async event => {
         for (const file of files) await addPhoto(file);
       }
       if (el.id === 'logo-input' && files[0]) {
-        state.contractor.logo = await compressImage(files[0], 500, .9);
+        state.contractor.logo = await compressImage(files[0], 500, 0.9);
         await save();
       }
       if (el.id === 'template-input' && files[0]) {
@@ -681,6 +680,22 @@ document.addEventListener('change', async event => {
       render();
     }
   } catch (error) {
+    fail(error);
+  }
+});
+
+document.addEventListener('focusout', event => {
+  const el = event.target.closest('[data-edit]');
+  if (!el) return;
+  const path = el.dataset.edit;
+  try {
+    const value = el.textContent.trim();
+    if (String(getPath(path)) === value) return;
+    updateField(path, value, el);
+    if (path.startsWith('expenses.')) message('Expense edited. Reconfirm it in Receipts before export.');
+    preview();
+  } catch (error) {
+    el.textContent = getPath(path);
     fail(error);
   }
 });
