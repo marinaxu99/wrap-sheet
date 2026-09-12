@@ -1,11 +1,11 @@
 import { validNumber, validDate } from './model.js';
 
-export async function compressImage(file, max = 960, quality = 0.80) {
+export async function compressImage(file, max = 1200, quality = 0.82) {
   if (!/^image\/(jpeg|png|webp|gif|heic|heif|avif)$/.test(file.type)) {
     throw new Error('Choose an image file (JPEG, PNG, WebP).');
   }
   if (file.size > 25 * 1024 * 1024) {
-    throw new Error('Image exceeds 25 MB. Please choose a smaller photo.');
+    throw new Error('Image exceeds 25 MB.');
   }
 
   const url = URL.createObjectURL(file);
@@ -27,7 +27,7 @@ export async function compressImage(file, max = 960, quality = 0.80) {
 
     return canvas.toDataURL('image/jpeg', quality);
   } catch (e) {
-    throw new Error(`Cannot process this photo: ${e.message}`);
+    throw new Error(`Cannot process image: ${e.message}`);
   } finally {
     URL.revokeObjectURL(url);
   }
@@ -46,19 +46,22 @@ function normalizeDate(raw) {
 
 export async function parseReceiptImage(image, key, currency, fetcher = fetch) {
   if (!key) {
-    throw new Error('Add your Gemini API key in Settings, or enter receipt details manually.');
+    throw new Error('Add your Gemini API key in Settings.');
   }
 
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 20000);
+  const timer = setTimeout(() => controller.abort(), 30000);
 
-  const prompt = `You are a film production accounting assistant. Extract data from this Korean or English receipt.
-- Vendor: Merchant/Store name.
-- Date: Date of transaction in YYYY-MM-DD. Normalize YY.MM.DD or YYYY년 MM월 DD일.
-- Total: Final amount paid including VAT.
-- VAT: Extracted VAT/부가세 amount (0 if not indicated).
-- Category: Pick exactly one: "Meals/Catering", "Coffee/Craft", "Transport/Gas/Parking", "Gear/Expendables", "Courier/Post", "Lodging", or "Other".
-- Currency: 3-letter ISO code (default to "${currency || 'KRW'}").`;
+  const prompt = `You are a film production accounting assistant. 
+Analyze this receipt image. It may contain a single receipt, OR multiple transaction slips (such as a Korean Hi-Pass highway toll statement 확인증 with multiple boxed entries).
+- If it has MULTIPLE slips/boxes (like toll transactions), extract EACH box as a separate item in the items array.
+- For each item:
+  - vendor: Merchant or Toll station name (e.g., "한국도로공사", "민자운영사 - 문산").
+  - date: Transaction date formatted as YYYY-MM-DD.
+  - total: Final amount paid (이용금액).
+  - vat: VAT amount (부가세) if listed, otherwise 0.
+  - category: Exactly one of: "Meals/Catering", "Coffee/Craft", "Transport/Gas/Parking", "Gear/Expendables", "Courier/Post", "Lodging", or "Other". (For tolls use "Transport/Gas/Parking").
+  - currency: 3-letter currency code (default "${currency || 'KRW'}").`;
 
   try {
     const response = await fetcher('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent', {
@@ -80,48 +83,58 @@ export async function parseReceiptImage(image, key, currency, fetcher = fetch) {
           responseSchema: {
             type: 'OBJECT',
             properties: {
-              vendor: { type: 'STRING' },
-              date: { type: 'STRING' },
-              total: { type: 'NUMBER', nullable: true },
-              vat: { type: 'NUMBER', nullable: true },
-              category: { type: 'STRING' },
-              currency: { type: 'STRING' },
-              warning: { type: 'STRING' }
+              items: {
+                type: 'ARRAY',
+                items: {
+                  type: 'OBJECT',
+                  properties: {
+                    vendor: { type: 'STRING' },
+                    date: { type: 'STRING' },
+                    total: { type: 'NUMBER', nullable: true },
+                    vat: { type: 'NUMBER', nullable: true },
+                    category: { type: 'STRING' },
+                    currency: { type: 'STRING' }
+                  },
+                  required: ['vendor', 'date', 'total', 'vat', 'category', 'currency']
+                }
+              }
             },
-            required: ['vendor', 'date', 'total', 'vat', 'category', 'currency']
+            required: ['items']
           }
         }
       })
     });
 
     if (!response.ok) {
-      const msgs = {
-        400: 'Invalid request or model configuration.',
-        401: 'API key is invalid. Please check Settings.',
-        403: 'API key does not have permission for Gemini 2.5 Flash.',
-        429: 'Gemini rate limit reached. Please wait a moment.'
-      };
-      throw new Error(msgs[response.status] || `OCR scan error (${response.status}).`);
+      throw new Error(`OCR scan failed (${response.status}).`);
     }
 
     const data = await response.json();
     const text = data.candidates?.[0]?.content?.parts?.find(p => p.text)?.text;
-    if (!text) throw new Error('No receipt text extracted.');
+    if (!text) throw new Error('No receipt data recognized.');
 
     const parsed = JSON.parse(text);
-    const dateFormatted = normalizeDate(parsed.date);
+    const results = (parsed.items || []).map(item => ({
+      vendor: (item.vendor || '').slice(0, 200),
+      date: normalizeDate(item.date),
+      total: typeof item.total === 'number' && validNumber(item.total) ? item.total : '',
+      vat: typeof item.vat === 'number' && validNumber(item.vat) ? item.vat : 0,
+      category: item.category || 'Transport/Gas/Parking',
+      currency: (item.currency || currency || 'KRW').toUpperCase(),
+      warning: !normalizeDate(item.date) ? 'Verify date' : ''
+    }));
 
-    return {
-      vendor: (parsed.vendor || '').slice(0, 200),
-      date: dateFormatted,
-      total: typeof parsed.total === 'number' && validNumber(parsed.total) ? parsed.total : '',
-      vat: typeof parsed.vat === 'number' && validNumber(parsed.vat) ? parsed.vat : 0,
-      category: parsed.category || 'Other',
-      currency: (parsed.currency || currency || 'KRW').toUpperCase(),
-      warning: parsed.warning || (!dateFormatted ? 'Verify receipt date.' : '')
-    };
+    return results.length > 0 ? results : [{
+      vendor: '',
+      date: '',
+      total: '',
+      vat: 0,
+      category: 'Other',
+      currency: currency || 'KRW',
+      warning: 'Could not extract items cleanly'
+    }];
   } catch (err) {
-    if (err.name === 'AbortError') throw new Error('OCR scan timed out. Try again or enter manually.');
+    if (err.name === 'AbortError') throw new Error('OCR scan timed out.');
     throw err;
   } finally {
     clearTimeout(timer);

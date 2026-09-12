@@ -69,7 +69,7 @@ button:disabled {
   cursor: not-allowed;
 }
 
-/* Base Uniform Form Inputs (Excluding checkboxes) */
+/* Base Form Inputs with Built-In Select Dropdown Arrow */
 input:not([type="checkbox"]):not([type="radio"]),
 select,
 textarea {
@@ -85,20 +85,25 @@ textarea {
   appearance: none;
 }
 
-/* Fix iOS date input height blowout */
-/* Fix iOS & WebKit date input alignment */
-/* ==========================================================================
-   DATE INPUT ALIGNMENT & TERMS SPLIT ROW
-   ========================================================================== */
+select {
+  padding-right: 32px !important;
+  cursor: pointer;
+  background-image: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="%238b979f" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>');
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  background-size: 11px;
+}
 
-/* 1. Date Input Alignment & Safari Opacity Fix */
+/* Date Input Vertical Centering */
 input[type="date"] {
   min-height: 44px;
   height: 44px;
-  line-height: normal;
-  padding: 0 14px;
-  display: flex;
+  display: inline-flex;
   align-items: center;
+  justify-content: flex-start;
+  padding: 0 14px !important;
+  line-height: 44px !important;
+  font-size: 14px;
   color: var(--text) !important;
   -webkit-text-fill-color: var(--text) !important;
   opacity: 1 !important;
@@ -106,63 +111,13 @@ input[type="date"] {
 
 input[type="date"]::-webkit-date-and-time-value {
   text-align: left;
-  line-height: normal;
-  min-height: 0;
-  margin: 0;
-  padding: 0;
-}
-
-/* 2. Side-by-Side Terms Dropdown + Due Date Row */
-.terms-due-cell {
-  width: 100%;
-}
-
-.terms-split-row {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  margin-top: 6px;
-  width: 100%;
-}
-
-/* Dropdown Arrow/Chevron */
-.select-chevron-wrap {
-  position: relative;
-  flex: 0 0 115px;
-  min-width: 105px;
-}
-
-.select-chevron-wrap select {
-  margin: 0 !important;
-  padding-right: 28px !important;
-  text-overflow: ellipsis;
-  cursor: pointer;
-  background-image: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="%238b979f" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>');
-  background-repeat: no-repeat;
-  background-position: right 10px center;
-  background-size: 11px;
-}
-
-/* Matching 44px height for the due date picker */
-.terms-split-row input[type="date"] {
-  flex: 1;
-  margin: 0 !important;
-  min-width: 0;
+  line-height: 44px !important;
   height: 44px !important;
   min-height: 44px !important;
-}
-
-/* Maintain side-by-side row on mobile */
-@media (max-width: 760px) {
-  .terms-split-row {
-    display: flex !important;
-    flex-direction: row !important;
-    gap: 8px !important;
-  }
-
-  .select-chevron-wrap {
-    flex: 0 0 105px !important;
-  }
+  margin: 0 !important;
+  padding: 0 !important;
+  display: flex;
+  align-items: center;
 }
 
 textarea {
@@ -209,13 +164,18 @@ label textarea {
 }
 
 dialog {
-  max-width: 520px;
+  position: fixed;
+  inset: 0;
+  margin: auto;
+  max-width: 480px;
   width: calc(100% - 32px);
-  background: #292929;
-  color: white;
-  border: 1px solid #555;
-  border-radius: 8px;
-  padding: 28px;
+  background: #1e2225;
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 24px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6);
+  z-index: 1000;
 }
 
 dialog::backdrop {
@@ -223,13 +183,19 @@ dialog::backdrop {
   backdrop-filter: blur(4px);
 }
 
+.hint {
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 6px;
+}
+
 
 /* ==========================================================================
-   SECTION 2: HEADER, TOPBAR & SAFE AREAS
+   SECTION 2: HEADER & PRODUCTION DECK
    ========================================================================== */
 
 .topbar {
-  min-height: 68px;
+  min-height: 64px;
   height: auto;
   padding-top: env(safe-area-inset-top);
   padding-left: max(5%, env(safe-area-inset-left));
@@ -276,38 +242,34 @@ dialog::backdrop {
   margin-left: 4px;
 }
 
-.top-actions {
-  display: flex;
-  gap: 12px;
-  align-items: center;
-}
-
-.status {
-  font-size: 11px;
-  color: var(--green);
-}
-
-.quiet {
-  border: 0;
-  background: transparent;
-  padding: 6px 10px;
+.setup-btn {
+  background: #252b2f;
+  border: 1px solid var(--line);
+  border-radius: 6px;
   font-size: 12px;
-  min-height: 36px;
+  font-weight: 600;
+  color: var(--text);
   height: 36px;
+  min-height: 36px;
+  padding: 0 12px;
+}
+
+.setup-btn:hover {
+  border-color: var(--accent);
 }
 
 main {
   max-width: 1400px;
   margin: auto;
-  padding: 36px max(5%, env(safe-area-inset-right)) calc(100px + env(safe-area-inset-bottom)) max(5%, env(safe-area-inset-left));
+  padding: 32px max(5%, env(safe-area-inset-right)) calc(100px + env(safe-area-inset-bottom)) max(5%, env(safe-area-inset-left));
 }
 
 .masthead {
   display: flex;
   justify-content: space-between;
-  align-items: flex-end;
-  margin-bottom: 34px;
-  gap: 28px;
+  align-items: center;
+  margin-bottom: 28px;
+  gap: 20px;
 }
 
 .eyebrow {
@@ -320,11 +282,11 @@ main {
 }
 
 h1 {
-  font-size: clamp(30px, 3.8vw, 50px);
+  font-size: clamp(28px, 3.5vw, 44px);
   line-height: 1.1;
   font-weight: 700;
   letter-spacing: -1.2px;
-  margin-bottom: 8px;
+  margin-bottom: 6px;
 }
 
 h1 span {
@@ -332,56 +294,82 @@ h1 span {
 }
 
 .masthead p {
-  font-size: 14px;
+  font-size: 13px;
   color: var(--muted);
 }
 
-.project-picker {
-  min-width: 320px;
-  max-width: 380px;
-}
-
-.picker-header {
+/* Production Deck */
+.project-deck {
   display: flex;
+  align-items: center;
   justify-content: space-between;
-  align-items: center;
-  margin-bottom: 8px;
-}
-
-.project-picker label {
-  margin: 0;
-  font-size: 9px;
-  letter-spacing: 1.5px;
-  color: var(--accent);
-}
-
-.inline {
-  display: flex;
-  gap: 10px;
-  align-items: center;
-}
-
-.project-picker select {
-  flex: 1;
-  min-height: 44px;
-  height: 44px;
-  margin: 0;
-}
-
-.action-btn {
-  min-height: 44px;
-  height: 44px;
-  white-space: nowrap;
-  font-size: 13px;
-  font-weight: 600;
-  background: #22272b;
+  gap: 14px;
+  background: var(--panel);
   border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 8px 12px;
+  min-height: 48px;
+}
+
+.deck-current {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.badge-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  flex-shrink: 0;
+}
+
+.deck-current strong {
+  font-size: 13px;
+  color: #fff;
+  max-width: 180px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 #save-status {
-  font-size: 11px;
+  font-size: 10px;
   color: var(--green);
-  font-weight: 500;
+  margin-left: 4px;
+  white-space: nowrap;
+}
+
+.deck-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.switch-btn-wrap {
+  position: relative;
+  width: 130px;
+}
+
+.switch-btn-wrap select {
+  height: 34px !important;
+  min-height: 34px !important;
+  padding: 4px 26px 4px 10px !important;
+  font-size: 12px !important;
+  border-radius: 6px;
+  background: #252b2f;
+  border: 1px solid var(--line);
+  cursor: pointer;
+}
+
+.deck-controls .action-btn {
+  height: 34px;
+  min-height: 34px;
+  padding: 0 10px;
+  font-size: 12px;
+  border-radius: 6px;
+  white-space: nowrap;
 }
 
 .steps {
@@ -426,7 +414,7 @@ h1 span {
 
 
 /* ==========================================================================
-   SECTION 3: WORKSPACE & FORMS
+   SECTION 3: WORKSPACE & PROFILE VAULT CARD
    ========================================================================== */
 
 .workspace {
@@ -449,11 +437,11 @@ h1 span {
   justify-content: space-between;
   align-items: flex-start;
   gap: 12px;
-  margin-bottom: 22px;
+  margin-bottom: 20px;
 }
 
 .section-head h2 {
-  font-size: 20px;
+  font-size: 19px;
   font-weight: 600;
   letter-spacing: -0.5px;
 }
@@ -462,16 +450,6 @@ h1 span {
   font-size: 12px;
   color: var(--muted);
   margin-top: 4px;
-}
-
-.tag {
-  border: 1px solid #3e484f;
-  border-radius: 4px;
-  padding: 4px 8px;
-  color: var(--accent);
-  font-size: 9px;
-  letter-spacing: 1px;
-  font-weight: 600;
 }
 
 .form-grid {
@@ -484,34 +462,82 @@ h1 span {
   grid-column: 1/-1;
 }
 
-.actions {
+/* Contractor Profile Vault Card */
+.profile-vault-card {
+  background: #181b1d;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 18px 20px;
+  transition: border-color 0.2s ease;
+}
+
+.profile-vault-card.locked {
+  border-left: 4px solid var(--accent);
+}
+
+.profile-vault-card.editing {
+  border: 1px dashed var(--accent);
+  background: #1a1e21;
+}
+
+.profile-vault-card input:disabled,
+.profile-vault-card textarea:disabled {
+  background: #141618 !important;
+  color: #a4b0b6 !important;
+  border-color: #262c30 !important;
+  cursor: not-allowed;
+}
+
+.vault-top {
   display: flex;
-  flex-wrap: wrap;
-  gap: 12px;
-  margin-top: 24px;
+  justify-content: space-between;
   align-items: center;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--line);
 }
 
-.inline-action-row {
+.vault-status {
   display: flex;
-  gap: 10px;
-  align-items: flex-end;
-  margin-bottom: 20px;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text);
 }
 
-.inline-action-row label {
-  flex: 1;
-  margin-bottom: 0;
+.vault-icon {
+  font-size: 14px;
 }
 
-.inline-action-row select {
+.vault-top .action-btn {
+  height: 36px;
+  min-height: 36px;
+  padding: 0 14px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+/* Terms Split Row */
+.terms-due-cell {
+  width: 100%;
+}
+
+.terms-split-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
   margin-top: 6px;
+  width: 100%;
 }
 
-.inline-action-row button {
-  height: 44px;
-  min-height: 44px;
-  padding: 0 18px;
+.terms-split-row .select-chevron-wrap {
+  width: 120px;
+}
+
+.terms-split-row input[type="date"] {
+  flex: 1;
+  margin: 0 !important;
+  height: 44px !important;
+  min-height: 44px !important;
 }
 
 .row-card {
@@ -549,7 +575,6 @@ h1 span {
   background: #3d2323;
 }
 
-/* Fixed Taxable Toggle Button Pill */
 .check-pill {
   display: inline-flex;
   align-items: center;
@@ -565,12 +590,6 @@ h1 span {
   color: var(--text);
   width: fit-content;
   user-select: none;
-  -webkit-user-select: none;
-}
-
-.check-pill:hover {
-  border-color: var(--accent);
-  background: #1e2225;
 }
 
 .check-pill input[type="checkbox"] {
@@ -578,21 +597,51 @@ h1 span {
   min-height: 18px !important;
   height: 18px !important;
   margin: 0 !important;
-  padding: 0 !important;
   cursor: pointer;
   accent-color: var(--accent);
-  -webkit-appearance: checkbox;
-  appearance: checkbox;
   display: inline-block !important;
 }
 
-/* Receipts */
+.receipt-card .actions button {
+  height: 38px !important;
+  min-height: 38px !important;
+  font-size: 13px !important;
+  padding: 0 16px !important;
+  font-weight: 600;
+  border-radius: 8px;
+}
+
+.ocr-notice-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(168, 195, 208, 0.08);
+  border: 1px solid rgba(168, 195, 208, 0.2);
+  border-radius: 8px;
+  padding: 10px 14px;
+  margin-bottom: 16px;
+  font-size: 12px;
+  color: var(--text);
+}
+
+.ocr-notice-bar a {
+  color: var(--accent);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
 .upload-box {
   border: 1px dashed #3e4950;
   background: #181c1e;
   border-radius: 12px;
   text-align: center;
-  padding: 26px 16px;
+  padding: 24px 16px;
+  transition: border-color 0.2s ease, background 0.2s ease;
+}
+
+.upload-box.dragover {
+  border-color: var(--accent);
+  background: #1e262b;
 }
 
 .upload-box .box-icon {
@@ -601,7 +650,6 @@ h1 span {
   fill: var(--accent);
   margin: 0 auto 10px;
   display: block;
-  opacity: 0.9;
 }
 
 .upload-box h3 {
@@ -623,19 +671,28 @@ h1 span {
   flex-wrap: wrap;
 }
 
-.file-button {
+.file-actions-grid .file-button,
+.file-actions-grid button {
   cursor: pointer;
   border: 1px solid var(--line);
-  background: #23292d;
+  background: #252b2f !important;
+  color: var(--text) !important;
   border-radius: 8px;
-  padding: 9px 16px;
+  padding: 10px 18px;
   min-height: 44px;
   height: 44px;
-  font-size: 12px;
-  font-weight: 500;
+  font-size: 13px;
+  font-weight: 600;
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 8px;
+}
+
+.file-actions-grid .file-button:hover,
+.file-actions-grid button:hover {
+  background: #2f373d !important;
+  border-color: var(--accent) !important;
 }
 
 .file-button input {
@@ -643,11 +700,12 @@ h1 span {
   opacity: 0;
   width: 1px;
   height: 1px;
+  pointer-events: none;
 }
 
 .btn-icon {
-  width: 15px;
-  height: 15px;
+  width: 16px;
+  height: 16px;
   fill: currentColor;
 }
 
@@ -675,7 +733,7 @@ h1 span {
   color: var(--green);
 }
 
-/* Desktop Summary */
+/* Wrap Sidebar & Jump Pill */
 .summary {
   border: 1px solid var(--line);
   border-radius: 12px;
@@ -729,6 +787,34 @@ h1 span {
   margin: 4px 0 14px;
 }
 
+.status-indicator-pill {
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 6px;
+  padding: 6px 10px;
+  margin: 10px 0 14px;
+  text-align: center;
+  cursor: pointer;
+  transition: filter 0.1s ease;
+}
+
+.status-indicator-pill:hover {
+  filter: brightness(1.15);
+}
+
+.status-indicator-pill.pending {
+  color: #dcb378;
+  background: rgba(220, 179, 120, 0.14);
+  border: 1px solid rgba(220, 179, 120, 0.35);
+}
+
+.status-indicator-pill.verified {
+  color: var(--green);
+  background: rgba(74, 222, 128, 0.12);
+  border: 1px solid rgba(74, 222, 128, 0.25);
+  cursor: default;
+}
+
 .primary {
   background: var(--accent);
   color: #12181b;
@@ -745,21 +831,6 @@ h1 span {
   justify-content: center;
 }
 
-.local-note {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  border-top: 1px solid var(--line);
-  margin-top: 20px;
-  padding-top: 16px;
-  font-size: 11px;
-  color: var(--muted);
-}
-
-.local-note span {
-  color: var(--green);
-}
-
 footer {
   display: flex;
   justify-content: space-between;
@@ -774,7 +845,7 @@ footer {
 
 
 /* ==========================================================================
-   SECTION 4: INVOICE SHEET & PDF EXPORT
+   SECTION 4: INVOICE PAPER & ARCHITECTURAL PRESETS
    ========================================================================== */
 
 .swatch-group {
@@ -889,7 +960,6 @@ footer {
   justify-content: center;
   align-items: flex-start;
   cursor: pointer;
-  box-sizing: border-box;
 }
 
 .preview-scaler-stage {
@@ -899,6 +969,7 @@ footer {
   transition: transform 0.15s ease;
 }
 
+/* Original Clean Sheet Styling */
 .invoice-paper {
   background: #ffffff;
   color: #1a1a1a;
@@ -907,8 +978,8 @@ footer {
   min-width: 680px;
   box-shadow: 0 4px 28px rgba(0, 0, 0, 0.45);
   font: 12px/1.65 WrapKorean, -apple-system, BlinkMacSystemFont, sans-serif;
-  box-sizing: border-box;
   border-radius: 4px;
+  box-sizing: border-box;
 }
 
 #scaler-viewport .invoice-paper {
@@ -930,71 +1001,112 @@ footer {
   padding: 1px 4px;
 }
 
-#invoice-modal-content [contenteditable="true"]:focus,
-#invoice-modal-content [data-edit]:focus {
-  outline: 2px solid var(--accent) !important;
-  background: rgba(168, 195, 208, 0.22);
-}
-
+/* Header */
 .invoice-paper .invoice-header {
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
   border-top: 6px solid var(--invoice-accent, #a8c3d0);
   border-bottom: 1.5px solid #1a1a1a;
-  padding: 20px 0 16px;
-  margin-bottom: 22px;
+  padding: 18px 0 14px;
+  margin-bottom: 20px;
+}
+
+.invoice-paper .logo {
+  max-height: 44px;
+  margin-bottom: 8px;
+  display: block;
 }
 
 .invoice-paper h1 {
-  font-size: 20px;
+  font-size: 21px;
   font-weight: 800;
   letter-spacing: 0.5px;
   text-transform: uppercase;
   color: #000;
-  margin-bottom: 4px;
+  margin: 0 0 4px;
 }
 
 .invoice-paper .inv-meta {
   text-align: right;
   font-size: 11px;
-  color: #444;
+  color: #333;
 }
 
-/* html2pdf-safe border without color-mix */
-.invoice-paper h2 {
-  font-size: 11px;
+.invoice-paper .inv-tag {
+  background: #252b2f;
+  color: #fff;
+  font-weight: 800;
+  font-size: 10px;
+  padding: 4px 10px;
+  border-radius: 4px;
+  letter-spacing: 0.5px;
+  display: inline-block;
+  margin-bottom: 6px;
+}
+
+/* Original Rounded Dual Card: Client & Shoot */
+.invoice-paper .bill-to-strip {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+  background: #f7f9fa;
+  padding: 14px 18px;
+  border-radius: 8px;
+  margin-bottom: 22px;
+  border: 1px solid #eef0f2;
+}
+
+.invoice-paper .bill-to-strip small {
+  font-size: 9px;
   font-weight: 700;
   letter-spacing: 1px;
+  color: #666;
+  display: block;
+  margin-bottom: 2px;
+}
+
+.invoice-paper .bill-to-strip strong {
+  font-size: 13px;
+  color: #000;
+}
+
+.invoice-paper .bill-to-strip p {
+  font-size: 11px;
+  color: #555;
+  margin-top: 2px;
+}
+
+/* Headings */
+.invoice-paper h2 {
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 0.5px;
   text-transform: uppercase;
-  margin: 22px 0 10px;
-  border-bottom: 2px solid var(--invoice-accent, #a8c3d0);
-  padding-bottom: 6px;
+  margin: 24px 0 10px;
   color: #111;
 }
 
+/* Clean Tables Without Vertical Lines */
 .invoice-paper table {
   width: 100%;
   border-collapse: collapse;
-  margin: 12px 0;
+  margin: 10px 0 6px;
 }
 
-/* html2pdf-safe table background */
 .invoice-paper th {
-  background: #f2f5f7;
-  color: #222;
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.8px;
-  font-weight: 700;
-  padding: 9px 10px;
+  background: transparent;
+  color: #111;
+  font-size: 11px;
+  font-weight: 800;
+  padding: 8px 4px;
   text-align: left;
-  border-bottom: 1px solid #dcdcdc;
+  border-bottom: 1.5px solid #1a1a1a;
 }
 
 .invoice-paper td {
-  padding: 9px 10px;
-  border-bottom: 1px solid #ebebeb;
+  padding: 10px 4px;
+  border-bottom: 1px solid #eee;
   font-size: 11px;
 }
 
@@ -1003,10 +1115,11 @@ footer {
   text-align: right;
 }
 
+/* Right-Aligned Totals Block */
 .invoice-paper .invoice-totals {
   margin: 20px 0 22px auto;
   max-width: 290px;
-  border-top: 1px solid #1a1a1a;
+  border-top: 1.5px solid #1a1a1a;
   padding-top: 6px;
 }
 
@@ -1017,7 +1130,6 @@ footer {
   font-size: 11px;
 }
 
-/* html2pdf-safe total card */
 .invoice-paper .amount-due {
   background: #edf2f5;
   border-top: 2px solid var(--invoice-accent, #a8c3d0);
@@ -1027,6 +1139,53 @@ footer {
   font-size: 15px !important;
   font-weight: 800;
   color: #000;
+}
+
+.invoice-paper .payment-block,
+.invoice-paper .notes-block {
+  margin-top: 22px;
+}
+
+.invoice-paper .payment-block p,
+.invoice-paper .notes-block p {
+  font-size: 11px;
+  line-height: 1.6;
+  color: #444;
+}
+
+.invoice-paper .proof-section {
+  margin-top: 36px;
+  padding-top: 20px;
+  border-top: 1px solid #ddd;
+}
+
+.invoice-paper .proof-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 14px;
+}
+
+.invoice-paper .proof-grid figure {
+  border: 1px solid #e0e0e0;
+  padding: 8px;
+  border-radius: 4px;
+  background: #fafafa;
+  break-inside: avoid;
+}
+
+.invoice-paper .proof-grid figure img {
+  width: 100%;
+  height: 180px;
+  object-fit: contain;
+  background: #fff;
+  border-radius: 2px;
+}
+
+.invoice-paper .proof-grid figure figcaption {
+  font-size: 9px;
+  color: #555;
+  margin-top: 6px;
+  text-align: center;
 }
 
 .invoice-paper .invoice-footer {
@@ -1041,7 +1200,7 @@ footer {
   text-transform: uppercase;
 }
 
-/* Full-Screen Safe-Padded Zoom & Edit Modal */
+/* Modals & Dialogs */
 dialog#invoice-zoom-modal {
   width: 100vw;
   max-width: 100vw;
@@ -1106,43 +1265,152 @@ dialog#invoice-zoom-modal[open] {
   cursor: default;
 }
 
-/* ==========================================================================
-   PAGE-BREAK RULES FOR CLEAN PDF EXPORTS
-   ========================================================================== */
+dialog#receipt-inspect-modal {
+  width: 92vw;
+  max-width: 960px;
+  height: 88dvh;
+  max-height: 88dvh;
+  background: #181b1d;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 0;
+  margin: auto;
+  overflow: hidden;
+  display: none;
+  flex-direction: column;
+}
 
+dialog#receipt-inspect-modal[open] {
+  display: flex;
+}
+
+.inspect-header {
+  min-height: 52px;
+  padding: 0 18px;
+  background: #1e2225;
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.inspect-header span {
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--text);
+}
+
+.inspect-body {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  overflow: hidden;
+  background: #101214;
+}
+
+.inspect-img-pane {
+  background: #090a0b;
+  overflow: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  border-right: 1px solid var(--line);
+}
+
+.inspect-img-pane img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  border-radius: 6px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+}
+
+.inspect-form-pane {
+  padding: 24px;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Preset 2: Swiss */
+.invoice-theme-swiss .swiss-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  border-bottom: 2px solid #000;
+  padding-bottom: 14px;
+  margin-bottom: 20px;
+}
+
+.invoice-theme-swiss .swiss-head h2 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 900;
+}
+
+.invoice-theme-swiss .swiss-head h1 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.invoice-theme-swiss .swiss-quad {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid #ddd;
+  margin-bottom: 16px;
+}
+
+.invoice-theme-swiss .swiss-quad small {
+  font-size: 8px;
+  color: #888;
+  letter-spacing: 1px;
+  display: block;
+}
+
+/* Preset 3: Field */
+.invoice-theme-field .field-banner {
+  background: #111;
+  color: #fff;
+  font-family: monospace;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 6px 10px;
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+
+.invoice-theme-field .field-trio {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+  border: 1px solid #222;
+  padding: 10px;
+  margin-bottom: 20px;
+}
+
+.invoice-theme-field .field-trio small {
+  font-size: 8px;
+  color: #666;
+  display: block;
+}
+
+/* Clean PDF Export Boundaries */
 .exporting {
   width: 760px !important;
   min-width: 760px !important;
   transform: none !important;
 }
 
-.exporting h1,
-.exporting h2,
-.exporting h3,
-.exporting .invoice-header,
-.exporting .invoice-totals,
-.exporting .invoice-footer,
 .exporting tr,
 .exporting figure,
-.exporting .proof-grid,
-.exporting .receipt-card,
-.exporting .section-block,
-.exporting [data-section] {
+.exporting .invoice-totals {
   break-inside: avoid !important;
   page-break-inside: avoid !important;
   -webkit-column-break-inside: avoid !important;
-}
-
-.exporting h2 {
-  break-after: avoid !important;
-  page-break-after: avoid !important;
-}
-
-.exporting p,
-.exporting td,
-.exporting th {
-  break-inside: avoid !important;
-  page-break-inside: avoid !important;
 }
 
 
@@ -1199,8 +1467,7 @@ dialog#invoice-zoom-modal[open] {
     font-size: 15px;
   }
 
-  .beta,
-  .status {
+  .beta {
     display: none;
   }
 
@@ -1215,17 +1482,26 @@ dialog#invoice-zoom-modal[open] {
     display: flex;
     flex-direction: column;
     align-items: stretch;
-    gap: 20px;
-    margin-bottom: 24px;
+    gap: 14px;
+    margin-bottom: 18px;
   }
 
   .masthead-copy h1 {
     font-size: 26px;
   }
 
-  .project-picker {
-    min-width: 100%;
+  .project-deck {
+    width: 100%;
     max-width: 100%;
+    padding: 8px 10px;
+  }
+
+  .deck-current strong {
+    max-width: 130px;
+  }
+
+  .switch-btn-wrap {
+    width: 110px;
   }
 
   .steps {
@@ -1263,7 +1539,6 @@ dialog#invoice-zoom-modal[open] {
     display: block;
     width: 100%;
     margin-bottom: calc(90px + env(safe-area-inset-bottom));
-    /* Prevents bottom dock from covering inputs */
   }
 
   #view {
@@ -1279,6 +1554,12 @@ dialog#invoice-zoom-modal[open] {
   .form-grid {
     grid-template-columns: 1fr !important;
     gap: 14px;
+  }
+
+  .terms-split-row {
+    display: flex !important;
+    flex-direction: row !important;
+    gap: 8px !important;
   }
 
   .summary {
@@ -1345,6 +1626,29 @@ dialog#invoice-zoom-modal[open] {
     display: inline-flex;
     align-items: center;
     justify-content: center;
+  }
+
+  dialog#receipt-inspect-modal {
+    width: 100vw;
+    max-width: 100vw;
+    height: 100dvh;
+    max-height: 100dvh;
+    border-radius: 0;
+  }
+
+  .inspect-body {
+    grid-template-columns: 1fr;
+    grid-template-rows: 240px 1fr;
+  }
+
+  .inspect-img-pane {
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+    padding: 10px;
+  }
+
+  .inspect-form-pane {
+    padding: 16px;
   }
 
   footer {

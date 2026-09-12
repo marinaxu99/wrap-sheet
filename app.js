@@ -4,7 +4,8 @@ import { renderInvoice, presets, sanitizeTemplate, checkTemplate, escapeHTML as 
 import { compressImage, parseReceiptImage } from './receipt.js';
 
 const $ = s => document.querySelector(s);
-let state, projects = [], templates = [], images = new Map(), tab = 'project', saveChain = Promise.resolve(), revision = 0, scanBusy = false, renderBusy = false;
+let state, projects = [], templates = [], images = new Map(), tab = 'project', saveChain = Promise.resolve(), revision = 0, scanBusy = false, renderBusy = false, messageTimer = null;
+let profileEditing = false;
 
 const SWATCHES = [
   { name: 'Arki Slate', color: '#a8c3d0' },
@@ -31,17 +32,24 @@ function calculateDueDate(invoiceDate, termsPreset) {
   if (termsPreset === 'net_15') return addDays(invoiceDate, 15);
   if (termsPreset === 'net_30') return addDays(invoiceDate, 30);
   if (termsPreset === 'net_60') return addDays(invoiceDate, 60);
-  return null; // custom
+  return null;
 }
 
-function message(text) {
+function message(text, persistent = false) {
   const el = $('#message');
   if (!el) return;
+  clearTimeout(messageTimer);
   el.textContent = text;
   el.hidden = !text;
+  if (text && !persistent) {
+    messageTimer = setTimeout(() => {
+      el.hidden = true;
+      el.textContent = '';
+    }, 4000);
+  }
 }
 
-function fail(error) { message(error.message || String(error)); }
+function fail(error) { message(error.message || String(error), true); }
 
 function setting(key) {
   try { return localStorage.getItem(`wrapsheet.${key}`) || ''; } catch { return ''; }
@@ -52,7 +60,7 @@ function setSetting(key, value) {
     if (value) localStorage.setItem(`wrapsheet.${key}`, value);
     else localStorage.removeItem(`wrapsheet.${key}`);
   } catch {
-    message('Browser settings could not be saved.');
+    message('Settings could not be saved.');
   }
 }
 
@@ -91,7 +99,7 @@ function save() {
     })
     .catch(error => {
       setSaveStatus('Not saved', '#f07c74');
-      message(`Could not save shoot: ${error.message}.`);
+      message(`Could not save shoot: ${error.message}.`, true);
       throw error;
     });
 
@@ -101,9 +109,11 @@ function save() {
 
 function updatePicker() {
   const picker = $('#project-picker');
+  const title = state.project.projectTitle || 'Untitled production';
+  if ($('#deck-current-title')) $('#deck-current-title').textContent = title;
   if (!picker) return;
-  picker.innerHTML = projects.map(p => `<option value="${p.id}">${e(p.project.projectTitle || 'Untitled production')}</option>`).join('');
-  picker.value = state.id;
+  picker.innerHTML = `<option value="" disabled selected>Switch Shoot ▾</option>` +
+    projects.map(p => `<option value="${p.id}">${e(p.project.projectTitle || 'Untitled production')}</option>`).join('');
 }
 
 function updateStickyActionBar() {
@@ -127,10 +137,27 @@ function summary() {
   if ($('#grand-total')) $('#grand-total').textContent = money(t.total, c);
 
   const pending = state.expenses.filter(r => !r.verified).length;
-  if ($('#receipt-status')) {
-    $('#receipt-status').textContent = pending
-      ? `${pending} receipt${pending === 1 ? '' : 's'} awaiting review`
-      : `Ready when you are`;
+  const statusPill = $('#receipt-status-pill');
+  if (statusPill) {
+    if (state.expenses.length === 0) {
+      statusPill.hidden = true;
+    } else if (pending > 0) {
+      statusPill.hidden = false;
+      statusPill.className = 'status-indicator-pill pending';
+      statusPill.textContent = `○ ${pending} receipt${pending === 1 ? '' : 's'} awaiting review →`;
+      statusPill.onclick = () => {
+        go('receipts');
+        setTimeout(() => {
+          const firstPending = document.querySelector('.badge:not(.verified)');
+          firstPending?.closest('.row-card')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }, 120);
+      };
+    } else {
+      statusPill.hidden = false;
+      statusPill.className = 'status-indicator-pill verified';
+      statusPill.textContent = `✓ All ${state.expenses.length} receipts verified · Audit ready`;
+      statusPill.onclick = null;
+    }
   }
   updateStickyActionBar();
 }
@@ -138,8 +165,8 @@ function summary() {
 function field(label, path, type = 'text', extra = '') {
   return `<label>${label}<input data-field="${path}" type="${type}" value="${e(getPath(path))}" ${extra}></label>`;
 }
-function area(label, path) {
-  return `<label class="full">${label}<textarea data-field="${path}">${e(getPath(path))}</textarea></label>`;
+function area(label, path, extra = '') {
+  return `<label class="full">${label}<textarea data-field="${path}" ${extra}>${e(getPath(path))}</textarea></label>`;
 }
 function select(label, path, options) {
   return `<label>${label}<select data-field="${path}">${options.map(o => {
@@ -152,7 +179,8 @@ function panel(title, description, content, tag = '') {
 }
 
 function projectView() {
-  const currentTerms = state.project.termsPreset || 'net_30';
+  const currentTerms = state.project.termsPreset || 'due_receipt';
+  const isLocked = !profileEditing;
 
   return panel('Set the scene.', 'Production metadata for the final invoice.',
     `<div class="form-grid">
@@ -168,34 +196,43 @@ function projectView() {
           <div class="terms-split-row">
             <div class="select-chevron-wrap">
               <select id="payment-terms-preset" data-field="project.termsPreset">
-  <option value="due_receipt" ${currentTerms === 'due_receipt' ? 'selected' : ''}>Due Now</option>
-  <option value="net_15" ${currentTerms === 'net_15' ? 'selected' : ''}>Net 15</option>
-  <option value="net_30" ${currentTerms === 'net_30' ? 'selected' : ''}>Net 30</option>
-  <option value="net_60" ${currentTerms === 'net_60' ? 'selected' : ''}>Net 60</option>
-  <option value="custom" ${currentTerms === 'custom' ? 'selected' : ''}>Custom</option>
-</select>
+                <option value="due_receipt" ${currentTerms === 'due_receipt' ? 'selected' : ''}>Due Now</option>
+                <option value="net_15" ${currentTerms === 'net_15' ? 'selected' : ''}>Net 15</option>
+                <option value="net_30" ${currentTerms === 'net_30' ? 'selected' : ''}>Net 30</option>
+                <option value="net_60" ${currentTerms === 'net_60' ? 'selected' : ''}>Net 60</option>
+                <option value="custom" ${currentTerms === 'custom' ? 'selected' : ''}>Custom</option>
+              </select>
             </div>
             <input data-field="project.dueDate" type="date" value="${e(getPath('project.dueDate'))}" id="payment-due-input">
           </div>
         </label>
       </div>
       ${area('Client address', 'project.clientAddress')}
-    </div>
-    <div class="actions">
-      <button class="primary" data-go="work">Continue to work →</button>
-      <button data-action="backup">Download backup</button>
     </div>`, 'PRODUCTION DETAILS') +
-    panel('The contractor behind the frame.', 'Your personal or studio contractor profile.',
-      `<div class="form-grid">
-      ${field('Contractor / company', 'contractor.name', 'text', 'placeholder="Your name or studio"')}
-      ${field('Email', 'contractor.email', 'email')}
-      ${field('Phone', 'contractor.phone', 'tel')}
-      ${field('Business registration / Tax ID', 'contractor.taxId')}
-      ${area('Address', 'contractor.address')}
-      ${field('Bank name', 'contractor.bankName')}
-      ${field('Account number', 'contractor.accountNumber')}
-      ${area('Payment terms', 'contractor.paymentTerms')}
-    </div>`);
+
+    panel('Contractor Profile Vault', 'Your verified contractor credentials. Locked to prevent accidental changes.',
+      `<div class="profile-vault-card ${isLocked ? 'locked' : 'editing'}">
+        <div class="vault-top">
+          <div class="vault-status">
+            <span class="vault-icon">${isLocked ? '🔒' : '✎'}</span>
+            <strong>${isLocked ? 'Profile Locked & Active' : 'Editing Contractor Profile'}</strong>
+          </div>
+          <button type="button" class="action-btn" data-action="${isLocked ? 'edit-profile' : 'save-profile'}">
+            ${isLocked ? '✎ Edit Profile' : '✓ Lock & Save Default'}
+          </button>
+        </div>
+
+        <div class="form-grid" style="margin-top:14px;">
+          ${field('Contractor / Company', 'contractor.name', 'text', isLocked ? 'disabled' : 'placeholder="Your name or studio"')}
+          ${field('Email', 'contractor.email', 'email', isLocked ? 'disabled' : '')}
+          ${field('Phone', 'contractor.phone', 'tel', isLocked ? 'disabled' : '')}
+          ${field('Business registration / Tax ID', 'contractor.taxId', 'text', isLocked ? 'disabled' : '')}
+          ${area('Business Address', 'contractor.address', isLocked ? 'disabled' : '')}
+          ${field('Bank Name', 'contractor.bankName', 'text', isLocked ? 'disabled' : '')}
+          ${field('Account Number', 'contractor.accountNumber', 'text', isLocked ? 'disabled' : '')}
+          ${area('Payment Terms', 'contractor.paymentTerms', isLocked ? 'disabled' : '')}
+        </div>
+      </div>`, 'PROFILE VAULT');
 }
 
 const laborTypes = ['Shoot Day', 'Prep Day', 'Travel Day', 'Half Day', 'Overtime', 'Kit Rental', 'Equipment Rental', 'Assistant', 'Post-production', 'Other'];
@@ -235,13 +272,18 @@ function workView() {
 }
 
 function receiptView() {
+  const hasApiKey = Boolean(setting('apiKey'));
+
   return panel('Proof, without the paperwork.', 'Upload slips as you get them. Only verified receipts enter the invoice.',
-    `<div class="upload-box">
+    `${!hasApiKey ? `<div class="ocr-notice-bar">
+      <span>ℹ Instant OCR requires a free Google AI key. Set it up once in <a data-action="open-settings">API & Setup ⚙</a></span>
+    </div>` : ''}
+    <div class="upload-box" id="receipt-dropzone">
       <svg class="box-icon" viewBox="0 0 24 24">
         <path d="M19 2H5c-1.1 0-2 .9-2 2v17l3-1.5 3 1.5 3-1.5 3 1.5 3-1.5 3 1.5V4c0-1.1-.9-2-2-2zm0 15.8l-1-.5-3 1.5-3-1.5-3 1.5-3-1.5-1 .5V4h14v13.8zM7 7h10v2H7zm0 4h10v2H7zm0 4h7v2H7z"/>
       </svg>
       <h3>Drop the admin. Keep the receipt.</h3>
-      <p>Multi-language OCR with Gemini Flash</p>
+      <p>Supports Hi-Pass tolls, parking, and catering slips</p>
       <div class="file-actions-grid">
         <label class="file-button">
           <svg class="btn-icon" viewBox="0 0 24 24"><path d="M12 15.2a3.2 3.2 0 100-6.4 3.2 3.2 0 000 6.4z"/><path d="M9 2L7.17 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2h-3.17L15 2H9zm3 15c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5z"/></svg>
@@ -257,7 +299,7 @@ function receiptView() {
       </div>
     </div>
     <div class="actions" style="margin: 16px 0 8px;">
-      <span class="hint">${state.expenses.length} receipts logged</span>
+      <span class="hint">${state.expenses.length} receipts logged · Tap thumbnail to inspect proof</span>
     </div>
     ${state.expenses.map((r, i) => `
       <div class="row-card">
@@ -267,7 +309,7 @@ function receiptView() {
         </div>
         <div class="receipt-card">
           <div>
-            ${images.get(r.receiptId) ? `<a href="${e(images.get(r.receiptId).imageFull)}" target="_blank" rel="noopener"><img class="receipt-image" src="${e(images.get(r.receiptId).imageThumbnail)}" alt="Receipt"></a>` : '<div class="empty">Manual</div>'}
+            ${images.get(r.receiptId) ? `<img class="receipt-image" src="${e(images.get(r.receiptId).imageThumbnail)}" alt="Receipt" data-inspect-id="${r.id}" style="cursor:pointer;" title="Tap to inspect">` : '<div class="empty">Manual</div>'}
           </div>
           <div>
             <div class="form-grid">
@@ -280,8 +322,14 @@ function receiptView() {
             </div>
             ${r.warning ? `<p class="notice">${e(r.warning)}</p>` : ''}
             <div class="actions">
-              ${!r.verified ? `<button class="primary" data-action="confirm-receipt" data-id="${r.id}">Confirm expense</button>` : ''}
-              ${r.receiptId ? `<button data-action="scan" data-id="${r.id}" ${scanBusy ? 'disabled' : ''}>${scanBusy ? 'Scanning…' : 'Scan OCR'}</button>` : ''}
+              ${!r.verified
+        ? `<button class="primary" data-action="confirm-receipt" data-id="${r.id}">Confirm expense</button>`
+        : `<button class="action-btn" data-action="unconfirm-receipt" data-id="${r.id}">Edit expense</button>`
+      }
+              ${r.receiptId && !r.verified
+        ? `<button class="action-btn" data-action="scan" data-id="${r.id}" ${scanBusy ? 'disabled' : ''}>${scanBusy ? 'Scanning…' : 'Re-scan OCR'}</button>`
+        : ''
+      }
             </div>
           </div>
         </div>
@@ -293,81 +341,100 @@ function receiptView() {
 
 function invoiceView() {
   const currentAccent = state.invoice.accent || '#a8c3d0';
+  const showGallery = state.invoice.options?.showReceiptGallery !== false;
 
-  return panel('Your name. Your invoice.', 'Review the live sheet before exporting.',
-    `<div class="invoice-controls">
-      ${select('Invoice layout preset', 'invoice.templateId', [...presets.map(p => [p.id, p.name]), ...templates.map(t => [t.id, `${t.name} (Custom)`])])}
-
-      <div style="margin-top: 14px;">
-        <label>Accent Palette</label>
-        <div class="swatch-group">
-          ${SWATCHES.map(s => `
-            <button type="button" class="swatch-btn ${currentAccent.toLowerCase() === s.color ? 'active' : ''}" 
-                    style="background: ${s.color}" data-set-color="${s.color}" title="${s.name}"></button>
-          `).join('')}
+  // Clutter-free 2-Panel Structure
+  return (
+    // Panel 1: Styling & Aesthetic Preset
+    panel('Invoice Style & Palette', 'Choose an editorial layout and cinema-accent color.',
+      `<div class="form-grid">
+        <div class="select-chevron-wrap full">
+          <label>Layout Preset
+            <select data-field="invoice.templateId" class="preset-dropdown">
+              ${presets.map(p => `<option value="${p.id}" ${state.invoice.templateId === p.id ? 'selected' : ''}>${e(p.name)}</option>`).join('')}
+              ${templates.map(t => `<option value="${t.id}" ${state.invoice.templateId === t.id ? 'selected' : ''}>${e(t.name)} (Custom)</option>`).join('')}
+            </select>
+          </label>
         </div>
+        <div class="full" style="margin-top: 6px;">
+          <label>Accent Palette</label>
+          <div class="swatch-group">
+            ${SWATCHES.map(s => `
+              <button type="button" class="swatch-btn ${currentAccent.toLowerCase() === s.color ? 'active' : ''}" 
+                      style="background: ${s.color}" data-set-color="${s.color}" title="${s.name}"></button>
+            `).join('')}
+          </div>
+        </div>
+      </div>`, 'LAYOUT ARCHETYPE') +
+
+    // Panel 2: Export Options & Extras Deck
+    panel('Export Options & Branding', 'Control PDF attachments, logo, and document exports.',
+      `<div class="invoice-options-deck">
+        <label class="check-pill full">
+          <input type="checkbox" data-field="invoice.options.showReceiptGallery" ${showGallery ? 'checked' : ''}>
+          <span>Include receipt proof gallery in PDF (Uncheck if using Google Drive)</span>
+        </label>
+
+        <div class="deck-row">
+          <label class="file-button deck-btn">
+            <svg class="btn-icon" viewBox="0 0 24 24"><path d="M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z"/></svg>
+            ${state.contractor.logo ? 'Change Logo' : 'Upload Logo'}
+            <input type="file" id="logo-input" accept="image/*">
+          </label>
+          ${state.contractor.logo ? '<button class="action-btn" data-action="remove-logo">Remove Logo</button>' : ''}
+
+          <label class="file-button deck-btn">
+            <svg class="btn-icon" viewBox="0 0 24 24"><path d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z"/></svg>
+            Upload Custom HTML
+            <input type="file" id="template-input" accept=".html,text/html">
+          </label>
+        </div>
+
+        <details style="margin-top: 18px;">
+          <summary style="cursor:pointer; font-size:12px; font-weight:600; color:var(--accent);">Customize Document Section Headings ▾</summary>
+          <div class="form-grid" style="margin-top:12px;">
+            ${Object.keys(state.invoice.labels).map(k => field(k.replace(/([A-Z])/g, ' $1'), `invoice.labels.${k}`)).join('')}
+          </div>
+        </details>
       </div>
 
-      <div class="deck-row">
-        <label class="file-button deck-btn">
-          <svg class="btn-icon" viewBox="0 0 24 24"><path d="M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z"/></svg>
-          Upload Logo
-          <input type="file" id="logo-input" accept="image/*">
-        </label>
-        ${state.contractor.logo ? '<button class="action-btn" data-action="remove-logo">Remove Logo</button>' : ''}
-
-        <label class="file-button deck-btn">
-          <svg class="btn-icon" viewBox="0 0 24 24"><path d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z"/></svg>
-          Upload HTML Template
-          <input type="file" id="template-input" accept=".html,text/html">
-        </label>
+      <div class="actions invoice-action-bar">
+        <button class="primary" data-action="export">
+          <svg class="btn-icon" viewBox="0 0 24 24"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>
+          Export PDF
+        </button>
+        <button data-action="copy-summary">
+          <svg class="btn-icon" viewBox="0 0 24 24"><path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg>
+          Copy Summary
+        </button>
+        <button data-action="clone-project">
+          <svg class="btn-icon" viewBox="0 0 24 24"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
+          Duplicate Shoot
+        </button>
       </div>
+      <p id="export-status" role="status" class="hint"></p>`, 'DOCUMENT ACTIONS') +
 
-      <details style="margin-top: 16px;">
-        <summary>Labels & sections</summary>
-        <div class="form-grid">
-          ${Object.keys(state.invoice.labels).map(k => field(k.replace(/([A-Z])/g, ' $1'), `invoice.labels.${k}`)).join('')}
-        </div>
-      </details>
-    </div>
-
-    <!-- Action Bar -->
-    <div class="actions invoice-action-bar">
-      <button class="primary" data-action="export">
-        <svg class="btn-icon" viewBox="0 0 24 24"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>
-        Export PDF
-      </button>
-      <button data-action="copy-summary">
-        <svg class="btn-icon" viewBox="0 0 24 24"><path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg>
-        Copy Summary
-      </button>
-      <button data-action="clone-project">
-        <svg class="btn-icon" viewBox="0 0 24 24"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
-        Duplicate Shoot
-      </button>
-    </div>
-    <p id="export-status" role="status" class="hint"></p>`) +
     `<!-- Proportional Scaled Viewport -->
-  <div class="preview-prompt-bar">
-    <span>Invoice Preview</span>
-    <span class="edit-zoom-pill" id="open-zoom-modal">🔍 Tap to View & Edit Full Size</span>
-  </div>
-  <div class="preview-viewport-box" id="scaler-viewport" title="Tap to expand and edit">
-    <div class="preview-scaler-stage" id="scaler-stage">
-      <div id="invoice-preview" class="invoice-paper"></div>
+    <div class="preview-prompt-bar">
+      <span>Live Sheet Preview</span>
+      <span class="edit-zoom-pill" id="open-zoom-modal">🔍 Tap to View & Edit Full Size</span>
     </div>
-  </div>
+    <div class="preview-viewport-box" id="scaler-viewport" title="Tap to expand and edit">
+      <div class="preview-scaler-stage" id="scaler-stage">
+        <div id="invoice-preview" class="invoice-paper"></div>
+      </div>
+    </div>
 
-  <!-- Full-Screen Safe-Padded Zoom & Edit Modal -->
-  <dialog id="invoice-zoom-modal">
-    <div class="zoom-modal-header">
-      <span>Tap any dashed field to edit</span>
-      <button type="button" id="close-zoom-modal" class="primary">Done</button>
-    </div>
-    <div class="zoom-modal-body" id="invoice-modal-backdrop">
-      <div id="invoice-modal-content" class="invoice-paper"></div>
-    </div>
-  </dialog>`;
+    <dialog id="invoice-zoom-modal">
+      <div class="zoom-modal-header">
+        <span>Tap any dashed field to edit</span>
+        <button type="button" id="close-zoom-modal" class="primary">Done</button>
+      </div>
+      <div class="zoom-modal-body" id="invoice-modal-backdrop">
+        <div id="invoice-modal-content" class="invoice-paper"></div>
+      </div>
+    </dialog>`
+  );
 }
 
 function enrichedState() {
@@ -472,40 +539,125 @@ async function loadProject(id) {
 }
 
 async function addPhoto(file) {
-  const full = await compressImage(file, 960, 0.80);
+  const full = await compressImage(file, 1200, 0.82);
   const thumb = await compressImage(file, 400, 0.72);
   const record = { id: uid(), projectId: state.id, imageFull: full, imageThumbnail: thumb, name: file.name };
   await db.put('receipts', record);
   images.set(record.id, record);
-  state.expenses.push({ id: uid(), receiptId: record.id, vendor: '', date: '', total: '', vat: '', currency: state.project.currency, category: '', verified: false, warning: '' });
-  await save();
+
+  const apiKey = setting('apiKey');
+  if (navigator.onLine && apiKey) {
+    scanBusy = true;
+    render();
+    message('Reading items with Gemini 2.5 Flash…', true);
+    try {
+      const items = await parseReceiptImage(full, apiKey, state.project.currency);
+      for (const item of items) {
+        state.expenses.unshift({
+          id: uid(),
+          receiptId: record.id,
+          vendor: item.vendor,
+          date: item.date,
+          total: item.total,
+          vat: item.vat,
+          currency: item.currency,
+          category: item.category,
+          verified: false,
+          warning: item.warning
+        });
+      }
+      message(`${items.length} item(s) extracted. Review and confirm.`);
+    } catch (e) {
+      state.expenses.unshift({
+        id: uid(),
+        receiptId: record.id,
+        vendor: '',
+        date: '',
+        total: '',
+        vat: '',
+        currency: state.project.currency,
+        category: '',
+        verified: false,
+        warning: 'Could not auto-scan'
+      });
+      fail(e);
+    } finally {
+      scanBusy = false;
+      await save();
+      render();
+    }
+  } else {
+    state.expenses.unshift({
+      id: uid(),
+      receiptId: record.id,
+      vendor: '',
+      date: '',
+      total: '',
+      vat: '',
+      currency: state.project.currency,
+      category: '',
+      verified: false,
+      warning: ''
+    });
+    await save();
+    render();
+    message('Receipt photo saved.');
+  }
 }
 
 async function scan(id) {
   const r = state.expenses.find(r => r.id === id);
   if (!r) return;
-  if (!navigator.onLine) throw new Error('Offline. Connect to run scan.');
+  const apiKey = setting('apiKey');
+  if (!apiKey) {
+    message('Add your Gemini API Key in Settings.', true);
+    return;
+  }
   scanBusy = true;
   render();
-  message('Scanning with Gemini Flash…');
+  message('Scanning with Gemini Flash…', true);
+
   try {
-    const result = await parseReceiptImage(images.get(r.receiptId).imageFull, setting('apiKey'), state.project.currency);
-    Object.assign(r, result, { verified: false });
+    const items = await parseReceiptImage(images.get(r.receiptId).imageFull, apiKey, state.project.currency);
+    Object.assign(r, items[0], { verified: false });
     await save();
-    message('Scan complete. Review the fields.');
+    message('Scan complete.');
+  } catch (err) {
+    fail(err);
   } finally {
     scanBusy = false;
     render();
   }
 }
 
-function download(name, blob) {
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = name;
-  a.click();
-  setTimeout(() => URL.revokeObjectURL(url), 10000);
+function openInspector(expenseId) {
+  const r = state.expenses.find(x => x.id === expenseId);
+  if (!r || !r.receiptId) return;
+  const imgRecord = images.get(r.receiptId);
+  if (!imgRecord) return;
+
+  const modal = $('#receipt-inspect-modal');
+  const imgTarget = $('#inspect-img-target');
+  const formTarget = $('#inspect-form-target');
+
+  const idx = state.expenses.findIndex(x => x.id === expenseId);
+
+  imgTarget.src = imgRecord.imageFull;
+  formTarget.innerHTML = `
+    <h3 style="margin-bottom:12px; font-size:16px;">Verify Line Item #${idx + 1}</h3>
+    <div class="form-grid" style="grid-template-columns:1fr; gap:12px;">
+      ${field('Vendor / 거래처', `expenses.${idx}.vendor`)}
+      ${field('Date / 날짜', `expenses.${idx}.date`, 'date')}
+      ${field('Total paid / 합계', `expenses.${idx}.total`, 'number', 'min="0" step="any"')}
+      ${field('Included VAT / 부가세', `expenses.${idx}.vat`, 'number', 'min="0" step="any"')}
+      ${field('Category', `expenses.${idx}.category`)}
+    </div>
+    <div style="margin-top:20px; display:flex; gap:10px;">
+      <button class="primary" data-action="confirm-receipt" data-id="${r.id}">Confirm & Verify</button>
+    </div>
+  `;
+
+  modal.showModal();
 }
 
 async function exportPDF() {
@@ -526,52 +678,31 @@ async function exportPDF() {
   let root;
   try {
     await save();
-    try {
-      await document.fonts.load('12px WrapKorean', '영수증 청구서');
-      await document.fonts.ready;
-    } catch {
-      // Custom font fallback
-    }
-
     root = document.createElement('div');
     root.className = 'invoice-paper exporting';
     root.style.setProperty('--invoice-accent', state.invoice.accent || '#a8c3d0');
     root.innerHTML = renderInvoice(template(), enrichedState());
+
+    if (state.invoice.options?.showReceiptGallery === false) {
+      const proofs = root.querySelector('.proof-section');
+      if (proofs) proofs.remove();
+    }
+
     document.body.append(root);
+    await Promise.all([...root.querySelectorAll('img')].map(img => img.decode().catch(() => { })));
 
-    await Promise.all(
-      [...root.querySelectorAll('img')].map(img => img.decode().catch(() => { }))
-    );
-
-    const filename =
-      (state.project.invoiceNumber || 'WrapSheet').replace(/[^\p{L}\p{N}_-]/gu, '_') + '.pdf';
+    const filename = (state.project.invoiceNumber || 'WrapSheet').replace(/[^\p{L}\p{N}_-]/gu, '_') + '.pdf';
 
     await window.html2pdf()
       .set({
         margin: [12, 10, 14, 10],
         filename,
         image: { type: 'jpeg', quality: 0.98 },
-        html2canvas: {
-          scale: 2,
-          useCORS: true,
-          backgroundColor: '#ffffff',
-          scrollY: 0,
-          windowWidth: 760
-        },
+        html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff', scrollY: 0, windowWidth: 760 },
         jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
         pagebreak: {
           mode: ['avoid-all', 'css', 'legacy'],
-          avoid: [
-            'h2',
-            'h1',
-            'tr',
-            'figure',
-            '.invoice-totals',
-            '.invoice-header',
-            '.invoice-footer',
-            '.proof-grid',
-            'p'
-          ]
+          avoid: ['h2', 'h1', 'tr', 'figure', '.invoice-totals', '.invoice-header', '.invoice-footer', 'p']
         }
       })
       .from(root)
@@ -607,7 +738,7 @@ const actions = {
     render();
   },
   'manual-receipt': async () => {
-    state.expenses.push({ id: uid(), receiptId: null, vendor: '', date: today(), total: '', vat: 0, currency: state.project.currency, category: '', verified: false, warning: '' });
+    state.expenses.unshift({ id: uid(), receiptId: null, vendor: '', date: today(), total: '', vat: 0, currency: state.project.currency, category: '', verified: false, warning: '' });
     await save();
     render();
   },
@@ -616,18 +747,40 @@ const actions = {
     validateReceipt(r, state.project.currency);
     r.verified = true;
     await save();
-    message('Expense verified.');
+    message('Expense verified and included in total.');
+    const inspectModal = $('#receipt-inspect-modal');
+    if (inspectModal && inspectModal.open) inspectModal.close();
     render();
+  },
+  'unconfirm-receipt': async id => {
+    const r = state.expenses.find(r => r.id === id);
+    if (r) {
+      r.verified = false;
+      await save();
+      message('Expense marked for editing and excluded from total.');
+      render();
+    }
   },
   'remove-receipt': async id => {
     const r = state.expenses.find(r => r.id === id);
     state.expenses = state.expenses.filter(r => r.id !== id);
     await save();
-    if (r.receiptId) {
-      await db.remove('receipts', r.receiptId);
-      images.delete(r.receiptId);
-    }
     render();
+  },
+  'edit-profile': () => {
+    profileEditing = true;
+    render();
+  },
+  'save-profile': () => {
+    profileEditing = false;
+    localStorage.setItem('wrapsheet.defaultContractor', JSON.stringify(state.contractor));
+    save();
+    render();
+    message(`★ Profile locked & saved as default (${state.contractor.name || 'Contractor'}).`);
+  },
+  'open-settings': () => {
+    $('#api-key').value = setting('apiKey');
+    $('#settings').showModal();
   },
   'scan': scan,
   'export': exportPDF,
@@ -655,35 +808,58 @@ Total Due: ${money(t.total, c)}`;
     await db.put('projects', clone);
     projects.push(clone);
     await loadProject(clone.id);
-    message('Shoot duplicated successfully.');
-  },
-  'backup': async () => {
-    await save();
-    download(`WrapSheet-${state.id}.json`, new Blob([JSON.stringify({ schemaVersion: 1, project: state, receipts: [...images.values()] }, null, 2)], { type: 'application/json' }));
+    message('Shoot duplicated.');
   }
 };
 
+function initDragAndDrop() {
+  const dropzone = $('#receipt-dropzone');
+  if (!dropzone) return;
+
+  ['dragenter', 'dragover'].forEach(name => {
+    dropzone.addEventListener(name, e => {
+      e.preventDefault();
+      e.stopPropagation();
+      dropzone.classList.add('dragover');
+    });
+  });
+
+  ['dragleave', 'drop'].forEach(name => {
+    dropzone.addEventListener(name, e => {
+      e.preventDefault();
+      e.stopPropagation();
+      dropzone.classList.remove('dragover');
+    });
+  });
+
+  dropzone.addEventListener('drop', async e => {
+    const files = [...e.dataTransfer.files].filter(f => f.type.startsWith('image/'));
+    for (const file of files) await addPhoto(file);
+  });
+}
+
 document.addEventListener('click', async event => {
-  const b = event.target.closest('button');
+  const b = event.target.closest('button') || event.target.closest('a[data-action]');
+
+  const inspectImg = event.target.closest('[data-inspect-id]');
+  if (inspectImg) {
+    openInspector(inspectImg.dataset.inspectId);
+    return;
+  }
+
+  if (event.target.closest('#close-inspect-modal')) {
+    $('#receipt-inspect-modal')?.close();
+    return;
+  }
 
   if (event.target.closest('#scaler-viewport') || event.target.closest('#open-zoom-modal')) {
-    const modal = $('#invoice-zoom-modal');
-    if (modal) {
-      modal.showModal();
-      preview();
-    }
+    $('#invoice-zoom-modal')?.showModal();
+    preview();
     return;
   }
 
-  if (event.target.closest('#close-zoom-modal')) {
-    const modal = $('#invoice-zoom-modal');
-    if (modal) modal.close();
-    return;
-  }
-
-  if (event.target.id === 'invoice-modal-backdrop' || event.target.id === 'invoice-zoom-modal') {
-    const modal = $('#invoice-zoom-modal');
-    if (modal) modal.close();
+  if (event.target.closest('#close-zoom-modal') || event.target.id === 'invoice-modal-backdrop') {
+    $('#invoice-zoom-modal')?.close();
     return;
   }
 
@@ -744,7 +920,6 @@ document.addEventListener('change', async event => {
       const val = el.type === 'checkbox' ? el.checked : el.value;
       updateField(el.dataset.field, val, el);
 
-      // Auto-compute payment due date based on net terms selection
       if (el.dataset.field === 'project.termsPreset') {
         const computed = calculateDueDate(state.project.invoiceDate, val);
         if (computed) {
@@ -754,7 +929,6 @@ document.addEventListener('change', async event => {
         }
       }
 
-      // If user sets a custom date, sync the preset select to 'custom'
       if (el.dataset.field === 'project.dueDate') {
         const presetSelect = $('#payment-terms-preset');
         if (presetSelect && state.project.termsPreset !== 'custom') {
@@ -766,9 +940,8 @@ document.addEventListener('change', async event => {
         }
       }
 
-      // If invoice date shifts, recalculate if active preset is dynamic
       if (el.dataset.field === 'project.invoiceDate' && state.project.termsPreset !== 'custom') {
-        const computed = calculateDueDate(val, state.project.termsPreset || 'net_30');
+        const computed = calculateDueDate(val, state.project.termsPreset || 'due_receipt');
         if (computed) {
           updateField('project.dueDate', computed, $('#payment-due-input'));
           const dueInput = $('#payment-due-input');
@@ -790,7 +963,6 @@ document.addEventListener('change', async event => {
         await save();
       }
       if (el.id === 'template-input' && files[0]) {
-        if (files[0].size > 250000) throw new Error('Template exceeds 250 KB limit.');
         const raw = await files[0].text();
         const html = checkTemplate(sanitizeTemplate(raw));
         const customT = { id: uid(), name: files[0].name.replace(/\.html?$/i, ''), html };
@@ -798,7 +970,7 @@ document.addEventListener('change', async event => {
         templates.push(customT);
         state.invoice.templateId = customT.id;
         await save();
-        message('Custom HTML template installed and active.');
+        message('Custom HTML template installed.');
       }
       el.value = '';
       render();
@@ -816,7 +988,6 @@ document.addEventListener('focusout', event => {
     const value = el.textContent.trim();
     if (String(getPath(path)) === value) return;
     updateField(path, value, el);
-    if (path.startsWith('expenses.')) message('Expense edited. Reconfirm it in Receipts before export.');
     preview();
   } catch (error) {
     el.textContent = getPath(path);
@@ -826,6 +997,7 @@ document.addEventListener('focusout', event => {
 
 $('#project-picker')?.addEventListener('change', async event => {
   const id = event.target.value;
+  if (!id) return;
   try {
     await saveChain;
     await loadProject(id);
@@ -840,6 +1012,14 @@ $('#new-project')?.addEventListener('click', async () => {
   try {
     await saveChain;
     state = newProject();
+
+    const savedContractor = localStorage.getItem('wrapsheet.defaultContractor');
+    if (savedContractor) {
+      try {
+        state.contractor = { ...state.contractor, ...JSON.parse(savedContractor) };
+      } catch { }
+    }
+
     images = new Map();
     tab = 'project';
     location.hash = 'project';
@@ -860,20 +1040,15 @@ $('#settings-form')?.addEventListener('submit', event => {
   event.preventDefault();
   setSetting('apiKey', $('#api-key').value.trim());
   $('#settings').close();
-  message('Settings saved.');
+  message('API key saved.');
+  render();
 });
 $('#clear-key')?.addEventListener('click', () => {
   setSetting('apiKey', '');
   $('#api-key').value = '';
   message('API key removed.');
+  render();
 });
-
-function network() {
-  const netEl = $('#network');
-  if (netEl) netEl.textContent = navigator.onLine ? '● Online' : '○ Offline';
-}
-window.addEventListener('online', network);
-window.addEventListener('offline', network);
 
 window.addEventListener('hashchange', () => {
   const next = location.hash.slice(1);
@@ -882,6 +1057,12 @@ window.addEventListener('hashchange', () => {
     render();
   }
 });
+
+const originalRender = render;
+render = function () {
+  originalRender();
+  if (tab === 'receipts') initDragAndDrop();
+};
 
 async function boot() {
   try {
@@ -893,15 +1074,19 @@ async function boot() {
     if (existing) await loadProject(existing.id);
     else {
       state = newProject();
+      const savedContractor = localStorage.getItem('wrapsheet.defaultContractor');
+      if (savedContractor) {
+        try {
+          state.contractor = { ...state.contractor, ...JSON.parse(savedContractor) };
+        } catch { }
+      }
       await save();
       setSetting('currentProjectId', state.id);
     }
     tab = ['project', 'work', 'receipts', 'invoice'].includes(location.hash.slice(1)) ? location.hash.slice(1) : 'project';
     render();
-    network();
     if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js').catch(() => { });
   } catch (error) {
-    $('#view').innerHTML = '<div class="panel"><h2>Local storage unavailable.</h2><button onclick="location.reload()">Reload</button></div>';
     fail(error);
   }
 }
