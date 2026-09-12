@@ -27,6 +27,12 @@
 </head>
 
 <body>
+    <!-- Floating HUD Notification Toast -->
+    <div id="hud-toast" class="hud-toast" role="status" aria-live="polite">
+        <span class="hud-dot"></span>
+        <span id="hud-toast-text" class="hud-text"></span>
+    </div>
+
     <header class="topbar">
         <a class="brand" href="#project">
             <span class="mark">W</span>
@@ -68,12 +74,6 @@
             <button data-tab="receipts"><span>03</span> Receipts</button>
             <button data-tab="invoice"><span>04</span> Invoice</button>
         </nav>
-
-        <!-- Floating HUD Notification Toast -->
-        <div id="hud-toast" class="hud-toast" role="status" aria-live="polite">
-            <span class="hud-dot"></span>
-            <span id="hud-toast-text" class="hud-text"></span>
-        </div>
 
         <div class="workspace">
             <section id="view" aria-live="polite"></section>

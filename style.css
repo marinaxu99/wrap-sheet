@@ -2,7 +2,6 @@
    SECTION 1: CORE TOKENS & TYPOGRAPHY STACK
    ========================================================================== */
 
-/* Local Korean Fallback */
 @font-face {
   font-family: WrapKorean;
   src: url('./vendor/NotoSansKR.ttf') format('truetype');
@@ -105,6 +104,30 @@ textarea {
   appearance: none;
 }
 
+/* Placeholders Clearly Differentiated as Ghost Text */
+input::placeholder,
+textarea::placeholder {
+  color: var(--muted) !important;
+  opacity: 0.42 !important;
+  font-style: italic;
+  letter-spacing: normal;
+  font-weight: 400;
+  -webkit-text-fill-color: var(--muted) !important;
+}
+
+input:focus::placeholder,
+textarea:focus::placeholder {
+  opacity: 0.25 !important;
+}
+
+input:not(:placeholder-shown),
+textarea:not(:placeholder-shown) {
+  color: var(--text) !important;
+  opacity: 1 !important;
+  font-style: normal;
+  -webkit-text-fill-color: var(--text) !important;
+}
+
 select {
   padding-right: 32px !important;
   cursor: pointer;
@@ -173,10 +196,7 @@ label textarea {
   letter-spacing: normal;
 }
 
-/* ==========================================================================
-   GAME-HUD TOAST NOTIFICATION (ZERO-SHIFT FLOATING BANNER)
-   ========================================================================== */
-
+/* Game-HUD Toast Container */
 .hud-toast {
   position: fixed;
   top: max(20px, env(safe-area-inset-top));
@@ -184,7 +204,6 @@ label textarea {
   transform: translate(-50%, -18px) scale(0.96);
   z-index: 10000;
   pointer-events: none;
-  /* Never blocks buttons or inputs below it */
   opacity: 0;
   visibility: hidden;
   display: inline-flex;
@@ -397,7 +416,7 @@ h1 span {
   color: var(--muted);
 }
 
-/* Production Island (Full Name Display + Clean Controls) */
+/* Production Island */
 .project-deck {
   display: flex;
   align-items: center;
@@ -435,7 +454,6 @@ h1 span {
   overflow: hidden;
   text-overflow: ellipsis;
   max-width: 100%;
-  /* Allows full name expansion */
 }
 
 #save-status {
@@ -453,7 +471,7 @@ h1 span {
   flex-shrink: 0;
 }
 
-/* Shoots Dropdown with Clean Restored Arrow */
+/* Shoots Dropdown with Restored Clean Arrow */
 .switch-btn-wrap {
   position: relative;
   width: 96px;
@@ -592,13 +610,12 @@ h1 span {
   background: transparent !important;
 }
 
-/* Fixed Baseline Alignment for Inline Actions */
+/* Equalized Baseline Alignment for Inline Actions */
 .inline-action-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 130px;
   gap: 12px;
   align-items: end;
-  /* Perfect bottom alignment with the input box */
   margin-bottom: 18px;
 }
 
@@ -1002,7 +1019,7 @@ h1 span {
 }
 
 /* ==========================================================================
-   INTERACTIVE STATUS BANNER
+   STATUS INDICATOR PILL (INTERACTIVE BANNER / COMPACT DOCK)
    ========================================================================== */
 
 .status-indicator-pill {
@@ -1034,6 +1051,17 @@ h1 span {
 .status-indicator-pill .pill-dot {
   font-size: 8px;
   margin-right: 6px;
+  display: inline-block;
+}
+
+.status-indicator-pill .pill-arrow {
+  font-size: 13px;
+  font-weight: 700;
+  transition: transform 0.15s ease;
+}
+
+.status-indicator-pill:hover .pill-arrow {
+  transform: translateX(2px);
 }
 
 .status-indicator-pill.verified {
@@ -1042,15 +1070,6 @@ h1 span {
   border-color: rgba(74, 222, 128, 0.2);
   justify-content: center;
   cursor: default;
-}
-
-@media (max-width: 760px) {
-  .summary .status-indicator-pill {
-    width: auto !important;
-    border-radius: 20px !important;
-    padding: 6px 12px !important;
-    margin: 0 !important;
-  }
 }
 
 .primary {
@@ -1701,7 +1720,6 @@ dialog#receipt-inspect-modal[open] {
     padding: 6px 10px;
   }
 
-  /* Allows full text visibility on mobile deck without premature cut-off */
   .deck-current strong {
     max-width: 100%;
   }
@@ -1829,10 +1847,26 @@ dialog#receipt-inspect-modal[open] {
     margin: 2px 0 0;
   }
 
+  /* Mobile dock review pill: single-line compact tag */
   .summary .status-indicator-pill {
-    padding: 6px 12px !important;
+    width: auto !important;
+    height: 36px !important;
+    min-height: 36px !important;
+    padding: 0 12px !important;
+    border-radius: 20px !important;
+    margin: 0 !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    gap: 6px !important;
+    white-space: nowrap !important;
+    flex-shrink: 0 !important;
     font-size: 11px !important;
-    max-width: 140px;
+  }
+
+  .summary .status-indicator-pill span {
+    white-space: nowrap !important;
+    display: inline-flex !important;
+    align-items: center !important;
   }
 
   .summary button.primary {

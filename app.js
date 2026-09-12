@@ -170,11 +170,17 @@ function summary() {
   const statusPill = $('#receipt-status-pill');
   if (statusPill) {
     if (state.expenses.length === 0) {
+      statusPill.style.display = 'none';
       statusPill.hidden = true;
     } else if (pending > 0) {
+      statusPill.style.display = '';
       statusPill.hidden = false;
       statusPill.className = 'status-indicator-pill pending';
-      statusPill.innerHTML = `<span><span class="pill-dot">●</span>${pending} unverified receipt${pending === 1 ? '' : 's'}</span><span style="font-size:10px; opacity:0.8; text-transform:uppercase; letter-spacing:0.5px;">Check →</span>`;
+      // App version (<= 760px): concise single-line tag
+      // Desktop version: full metadata banner
+      statusPill.innerHTML = window.innerWidth <= 760
+        ? `<span><span class="pill-dot">●</span> ${pending} receipt${pending === 1 ? '' : 's'} →</span>`
+        : `<span><span class="pill-dot">●</span> ${pending} unverified receipt${pending === 1 ? '' : 's'}</span><span style="font-size:10px; opacity:0.8; text-transform:uppercase; letter-spacing:0.5px;">Check →</span>`;
       statusPill.onclick = () => {
         go('receipts');
         setTimeout(() => {
@@ -183,9 +189,12 @@ function summary() {
         }, 120);
       };
     } else {
+      statusPill.style.display = '';
       statusPill.hidden = false;
       statusPill.className = 'status-indicator-pill verified';
-      statusPill.innerHTML = `<span>✓ All receipts verified</span>`;
+      statusPill.innerHTML = window.innerWidth <= 760
+        ? `<span>✓ Verified</span>`
+        : `<span>✓ All receipts verified</span>`;
       statusPill.onclick = null;
     }
   }
@@ -211,13 +220,14 @@ function panel(title, description, content, tag = '') {
 function projectView() {
   const currentTerms = state.project.termsPreset || 'due_receipt';
   const isLocked = !profileEditing;
+  const autoNumberPlaceholder = state.project.defaultInvoiceNumber || `WS-${today().replaceAll('-', '')}-001`;
 
   return panel('Set the scene.', 'Production metadata for the final invoice.',
     `<div class="form-grid">
       ${field('Project title', 'project.projectTitle', 'text', 'placeholder="e.g. Autumn campaign — Seoul" maxlength="200"')}
       ${field('Client / production company', 'project.clientName', 'text', 'placeholder="Production studio or client name" maxlength="200"')}
       ${select('Currency', 'project.currency', [['KRW', 'KRW — Korean won'], ['USD', 'USD — US dollar'], ['EUR', 'EUR — Euro']])}
-      ${field('Invoice number', 'project.invoiceNumber')}
+      ${field('Invoice number', 'project.invoiceNumber', 'text', `placeholder="${e(autoNumberPlaceholder)}" maxlength="100"`)}
       ${field('Shoot start', 'project.shootStart', 'date')}
       ${field('Shoot end', 'project.shootEnd', 'date')}
       ${field('Invoice date', 'project.invoiceDate', 'date')}
@@ -297,9 +307,6 @@ function workView() {
       </div>`).join('') : '<div class="empty" style="padding:20px 0; color:var(--muted);">No work logged yet. Add your first shoot day above.</div>'}
     <div class="form-grid" style="margin-top:20px;">
       ${field('Tax on taxable work (%)', 'project.taxRate', 'number', 'min="0" max="100" step="0.1" placeholder="e.g. 3.3 or 10"')}
-    </div>
-    <div class="actions" style="margin-top: 24px;">
-      <button class="primary" data-go="receipts">Continue to Receipts</button>
     </div>`, 'WORK\nLOG');
 }
 
@@ -379,10 +386,7 @@ function receiptView() {
             </div>
           </div>
         </div>
-      </div>`).join('')}
-    <div class="actions" style="margin-top: 24px;">
-      <button class="primary" data-go="invoice">Review Invoice</button>
-    </div>`, 'RECEIPTS\nPROOF');
+      </div>`).join('')}`, 'RECEIPTS\nPROOF');
 }
 
 function invoiceView() {
@@ -441,6 +445,7 @@ function invoiceView() {
         </details>
       </div>
 
+      <!-- Balanced 2x2 Action Button Grid -->
       <div class="actions invoice-action-bar">
         <button class="primary" data-action="export">
           <svg class="btn-icon" viewBox="0 0 24 24"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>
@@ -452,7 +457,7 @@ function invoiceView() {
         </button>
         <button data-action="clone-project">
           <svg class="btn-icon" viewBox="0 0 24 24"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
-          Duplicate
+          ＋ Duplicate
         </button>
         <button class="danger-btn" data-action="delete-project">
           <svg class="btn-icon" viewBox="0 0 24 24"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
@@ -485,7 +490,21 @@ function invoiceView() {
 }
 
 function enrichedState() {
-  return { ...state, expenses: state.expenses.map(r => ({ ...r, imageThumbnail: images.get(r.receiptId)?.imageThumbnail || '' })) };
+  const effectiveInvoiceNumber = state.project.invoiceNumber?.trim()
+    || state.project.defaultInvoiceNumber
+    || 'WrapSheet';
+
+  return {
+    ...state,
+    project: {
+      ...state.project,
+      invoiceNumber: effectiveInvoiceNumber
+    },
+    expenses: state.expenses.map(r => ({
+      ...r,
+      imageThumbnail: images.get(r.receiptId)?.imageThumbnail || ''
+    }))
+  };
 }
 
 function template() {
@@ -524,19 +543,6 @@ function preview() {
         stage.style.transform = 'none';
         stage.style.marginBottom = '0px';
       }
-    }
-
-    const modalContent = $('#invoice-modal-content');
-    const modalBackdrop = $('#invoice-modal-backdrop');
-    if (modalContent && modalBackdrop && window.innerWidth <= 760) {
-      const availModalWidth = window.innerWidth - 24;
-      const baseWidth = 680;
-      const modalScale = Math.min(1, availModalWidth / baseWidth);
-      modalContent.style.transform = `scale(${modalScale})`;
-      modalContent.style.marginBottom = `-${modalContent.offsetHeight * (1 - modalScale)}px`;
-    } else if (modalContent) {
-      modalContent.style.transform = 'none';
-      modalContent.style.marginBottom = '0px';
     }
   });
 }
@@ -770,11 +776,13 @@ function navigateInspector(delta) {
 }
 
 async function exportPDF() {
+  const effectiveInvoiceNumber = state.project.invoiceNumber?.trim() || state.project.defaultInvoiceNumber;
+
   if (
     !state.project.projectTitle.trim() ||
     !state.project.clientName.trim() ||
     !state.contractor.name.trim() ||
-    !state.project.invoiceNumber.trim()
+    !effectiveInvoiceNumber
   ) {
     throw new Error('Please fill in project, client, contractor name, and invoice number before exporting.');
   }
@@ -800,7 +808,7 @@ async function exportPDF() {
     document.body.append(root);
     await Promise.all([...root.querySelectorAll('img')].map(img => img.decode().catch(() => { })));
 
-    const filename = (state.project.invoiceNumber || 'WrapSheet').replace(/[^\p{L}\p{N}_-]/gu, '_') + '.pdf';
+    const filename = (effectiveInvoiceNumber || 'WrapSheet').replace(/[^\p{L}\p{N}_-]/gu, '_') + '.pdf';
 
     await window.html2pdf()
       .set({
@@ -909,7 +917,7 @@ const actions = {
     const t = totals(state), c = state.project.currency;
     const summaryText = `[WrapSheet] ${state.project.projectTitle || 'Production'}
 Client: ${state.project.clientName || '-'}
-Invoice: ${state.project.invoiceNumber || '-'}
+Invoice: ${state.project.invoiceNumber || state.project.defaultInvoiceNumber || '-'}
 Work & Equipment: ${money(t.labor, c)}
 Verified Expenses: ${money(t.expenses, c)}
 Total Due: ${money(t.total, c)}`;
@@ -931,13 +939,36 @@ Total Due: ${money(t.total, c)}`;
     const confirmed = confirm(`Are you sure you want to permanently delete "${title}"? This clears all its associated receipts and data.`);
     if (!confirmed) return;
 
+    const deleteItem = async (storeName, id) => {
+      if (typeof db.del === 'function') return db.del(storeName, id);
+      if (typeof db.deleteRecord === 'function') return db.deleteRecord(storeName, id);
+      if (typeof db.remove === 'function') return db.remove(storeName, id);
+      if (typeof db.delete === 'function') return db.delete(storeName, id);
+
+      return new Promise((resolve, reject) => {
+        const req = indexedDB.open('wrapsheet');
+        req.onsuccess = () => {
+          const idb = req.result;
+          try {
+            const tx = idb.transaction(storeName, 'readwrite');
+            tx.objectStore(storeName).delete(id);
+            tx.oncomplete = () => resolve();
+            tx.onerror = () => reject(tx.error);
+          } catch (e) {
+            resolve();
+          }
+        };
+        req.onerror = () => reject(req.error);
+      });
+    };
+
     try {
       for (const r of state.expenses) {
         if (r.receiptId) {
-          await db.del('receipts', r.receiptId).catch(() => { });
+          await deleteItem('receipts', r.receiptId).catch(() => { });
         }
       }
-      await db.del('projects', state.id).catch(() => { });
+      await deleteItem('projects', state.id).catch(() => { });
 
       projects = projects.filter(p => p.id !== state.id);
 

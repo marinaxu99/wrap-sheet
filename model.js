@@ -16,6 +16,7 @@ export const labels = {
 
 export function newProject() {
     const baseToday = today();
+    const autoId = `WS-${baseToday.replaceAll('-', '')}-${crypto.randomUUID().slice(0, 4).toUpperCase()}`;
 
     return {
         id: uid(),
@@ -29,10 +30,11 @@ export function newProject() {
             invoiceDate: baseToday,
             termsPreset: 'due_receipt',
             dueDate: baseToday,
-            invoiceNumber: `WS-${baseToday.replaceAll('-', '')}-${crypto.randomUUID().slice(0, 4).toUpperCase()}`,
+            defaultInvoiceNumber: autoId, // Usable auto-generated fallback
+            invoiceNumber: '',           // Empty string so it acts as placeholder in form
             currency: 'KRW',
             notes: 'Thank you for making it happen.',
-            taxRate: 3.3
+            taxRate: 0
         },
         contractor: {
             name: '',
