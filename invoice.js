@@ -58,7 +58,7 @@ export function renderInvoice(template, s, { editable = false } = {}) {
   const text = (path, value) => edit(path, value);
   const cash = value => e(money(value, c));
 
-  // Shared Clean Table Rows
+  // Shared Line Items Table
   const laborRows = s.labor.map((r, i) => `
     <tr>
       <td>${text(`labor.${i}.description`, r.description)}<br><small style="color:#666">${text(`labor.${i}.date`, r.date)}</small></td>
@@ -79,6 +79,7 @@ export function renderInvoice(template, s, { editable = false } = {}) {
     </section>
   `;
 
+  // Shared Reimbursable Expense Table
   const expenseRows = s.expenses.filter(r => r.verified).map((r, i) => `
     <tr>
       <td>${text(`expenses.${i}.vendor`, r.vendor)}<br><small style="color:#666">${text(`expenses.${i}.date`, r.date)}</small></td>
@@ -106,6 +107,7 @@ export function renderInvoice(template, s, { editable = false } = {}) {
     </section>
   `;
 
+  // Shared Proof Grid
   const receiptGallery = (o.showReceiptGallery !== false && s.expenses.some(r => r.verified)) ? `
     <section class="proof-section" style="margin-top:28px;">
       <h2>${label('receiptsTitle')}</h2>
@@ -147,6 +149,7 @@ export function renderInvoice(template, s, { editable = false } = {}) {
     </section>
   ` : '';
 
+  // Custom User HTML Template Rendering
   if (template?.html) {
     const values = {
       invoiceTitle: label('invoiceTitle'),
@@ -176,7 +179,9 @@ export function renderInvoice(template, s, { editable = false } = {}) {
     return safe.replace(/{{\s*(\w+)\s*}}/g, (_, key) => values[key] ?? '');
   }
 
-  // PRESET 1: PRODUCTION (Your Beloved Original Design)
+  // ----------------------------------------------------
+  // PRESET 1: PRODUCTION (Your Original Cinema Wrap Design)
+  // ----------------------------------------------------
   if (currentPresetId === 'production') {
     return `
       <div class="invoice-theme-production">
@@ -222,7 +227,9 @@ export function renderInvoice(template, s, { editable = false } = {}) {
     `;
   }
 
+  // ----------------------------------------------------
   // PRESET 2: EDITORIAL SWISS (Minimalist Hairlines)
+  // ----------------------------------------------------
   if (currentPresetId === 'minimal') {
     return `
       <div class="invoice-theme-swiss">
@@ -259,7 +266,9 @@ export function renderInvoice(template, s, { editable = false } = {}) {
     `;
   }
 
+  // ----------------------------------------------------
   // PRESET 3: FIELD LEDGER (Technical Grid & Callout)
+  // ----------------------------------------------------
   return `
     <div class="invoice-theme-field">
       <div class="field-banner">

@@ -8,11 +8,11 @@ let state, projects = [], templates = [], images = new Map(), tab = 'project', s
 let profileEditing = false;
 
 const SWATCHES = [
-  { name: 'Arki Slate', color: '#a8c3d0' },
-  { name: 'Kodak Amber', color: '#d4a373' },
-  { name: 'Studio Olive', color: '#9aa899' },
-  { name: 'Monochrome', color: '#c8c8c4' },
-  { name: 'Muted Clay', color: '#b5838d' }
+  { name: 'Arki Slate', color: '#a8c3d0', desc: 'Cool Field Neutral' },
+  { name: 'Kodak Amber', color: '#d4a373', desc: 'Warm 3200K Tungsten' },
+  { name: 'Studio Olive', color: '#9aa899', desc: 'Arri Monitor Green' },
+  { name: 'Technicolor Carmine', color: '#c97a7e', desc: 'Vintage Film Wash' },
+  { name: 'Monochrome Silver', color: '#c8c8c4', desc: 'Classic B&W Starch' }
 ];
 
 function addDays(isoDateStr, days) {
@@ -343,9 +343,7 @@ function invoiceView() {
   const currentAccent = state.invoice.accent || '#a8c3d0';
   const showGallery = state.invoice.options?.showReceiptGallery !== false;
 
-  // Clutter-free 2-Panel Structure
   return (
-    // Panel 1: Styling & Aesthetic Preset
     panel('Invoice Style & Palette', 'Choose an editorial layout and cinema-accent color.',
       `<div class="form-grid">
         <div class="select-chevron-wrap full">
@@ -357,17 +355,16 @@ function invoiceView() {
           </label>
         </div>
         <div class="full" style="margin-top: 6px;">
-          <label>Accent Palette</label>
+          <label>Cinema Accent Grade</label>
           <div class="swatch-group">
             ${SWATCHES.map(s => `
               <button type="button" class="swatch-btn ${currentAccent.toLowerCase() === s.color ? 'active' : ''}" 
-                      style="background: ${s.color}" data-set-color="${s.color}" title="${s.name}"></button>
+                      style="background: ${s.color}" data-set-color="${s.color}" title="${s.name} (${s.desc})"></button>
             `).join('')}
           </div>
         </div>
       </div>`, 'LAYOUT ARCHETYPE') +
 
-    // Panel 2: Export Options & Extras Deck
     panel('Export Options & Branding', 'Control PDF attachments, logo, and document exports.',
       `<div class="invoice-options-deck">
         <label class="check-pill full">
