@@ -10,6 +10,14 @@
     <meta name="theme-color" content="#141618">
     <meta name="description" content="Log shoot days, scan receipts, and generate an audit-ready invoice.">
     <title>WrapSheet — Ready for wrap.</title>
+
+    <!-- Google Fonts: Montserrat (Body/Forms/Brand) & Space Grotesk (Technical Accents/Tags) -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link
+        href="https://fonts.googleapis.com/css2?family=Montserrat:ital,wght@0,300;0,400;0,500;0,600;0,700;0,800;1,400&family=Space+Grotesk:wght@500;600;700&display=swap"
+        rel="stylesheet">
+
     <link rel="manifest" href="./manifest.json">
     <link rel="icon" href="./icon.svg">
     <link rel="apple-touch-icon" href="./icon-192.png">
@@ -38,6 +46,7 @@
                 <p>Log shoot days, scan receipts, and export an audit-ready invoice.</p>
             </div>
 
+            <!-- Production Deck Island -->
             <div class="project-deck">
                 <div class="deck-current">
                     <span class="badge-dot"></span>
@@ -48,7 +57,7 @@
                     <div class="switch-btn-wrap">
                         <select id="project-picker" aria-label="Switch shoot"></select>
                     </div>
-                    <button id="new-project" class="action-btn" title="Create a new shoot">＋ New</button>
+                    <button id="new-project" class="action-btn-icon-only" title="Create a new shoot">＋</button>
                 </div>
             </div>
         </div>
@@ -65,6 +74,7 @@
         <div class="workspace">
             <section id="view" aria-live="polite"></section>
 
+            <!-- Sticky Wrap Dock -->
             <aside class="summary">
                 <div class="eyebrow">LIVE WRAP SUMMARY</div>
                 <h2 id="summary-name">Untitled production</h2>
@@ -89,12 +99,19 @@
         </footer>
     </main>
 
+    <!-- Interactive Deck Inspector Modal with Swipe & Controls -->
     <dialog id="receipt-inspect-modal">
         <div class="inspect-header">
-            <span>Inspect Receipt Proof</span>
+            <div class="inspect-nav-controls">
+                <button type="button" id="inspect-prev-btn" class="action-btn inspect-nav-btn"
+                    title="Previous receipt (Left arrow)">← Prev</button>
+                <span id="inspect-counter">#1 of 1</span>
+                <button type="button" id="inspect-next-btn" class="action-btn inspect-nav-btn"
+                    title="Next receipt (Right arrow)">Next →</button>
+            </div>
             <button type="button" id="close-inspect-modal" class="primary">Done</button>
         </div>
-        <div class="inspect-body">
+        <div class="inspect-body" id="inspect-swipe-area">
             <div class="inspect-img-pane">
                 <img id="inspect-img-target" src="" alt="Receipt Large View">
             </div>

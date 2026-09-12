@@ -1,7 +1,8 @@
 /* ==========================================================================
-   SECTION 1: CORE RESETS & DESIGN TOKENS
+   SECTION 1: CORE TOKENS & TYPOGRAPHY STACK
    ========================================================================== */
 
+/* Local Korean Fallback */
 @font-face {
   font-family: WrapKorean;
   src: url('./vendor/NotoSansKR.ttf') format('truetype');
@@ -25,38 +26,52 @@
   --accent: #a8c3d0;
   --accent-hover: #c4d9e3;
   --green: #4ade80;
+
+  --font-body: 'Montserrat', WrapKorean, -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-accent: 'Space Grotesk', monospace, sans-serif;
 }
 
 body {
   background: var(--bg);
   color: var(--text);
-  font: 14px/1.5 -apple-system, BlinkMacSystemFont, 'Segoe UI', WrapKorean, sans-serif;
+  font: 14px/1.55 var(--font-body);
   -webkit-font-smoothing: antialiased;
+  letter-spacing: -0.01em;
+}
+
+:lang(ko) {
+  font-family: 'Montserrat', WrapKorean, -apple-system, sans-serif;
+  word-break: keep-all;
+  letter-spacing: -0.02em;
 }
 
 button,
 input,
 select,
 textarea {
-  font: inherit;
+  font-family: var(--font-body);
   color: inherit;
 }
 
+/* Base Unified Button Styling */
 button {
   cursor: pointer;
   border: 1px solid var(--line);
   background: #252b2f;
+  color: var(--text);
   border-radius: 8px;
-  padding: 10px 18px;
+  padding: 0 16px;
   min-height: 44px;
   height: 44px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 8px;
-  font-weight: 500;
+  font-size: 13px;
+  font-weight: 600;
   line-height: 1;
   transition: background 0.15s ease, border-color 0.15s ease;
+  white-space: nowrap;
 }
 
 button:hover {
@@ -69,6 +84,7 @@ button:disabled {
   cursor: not-allowed;
 }
 
+/* Inputs, Selects & Date Pickers Unified */
 input:not([type="checkbox"]):not([type="radio"]),
 select,
 textarea {
@@ -80,6 +96,11 @@ textarea {
   padding: 10px 14px;
   min-height: 44px;
   height: 44px;
+  font-family: var(--font-body);
+  font-size: 14px !important;
+  color: var(--text) !important;
+  opacity: 1 !important;
+  -webkit-text-fill-color: var(--text) !important;
   -webkit-appearance: none;
   appearance: none;
 }
@@ -101,7 +122,7 @@ input[type="date"] {
   justify-content: flex-start;
   padding: 0 14px !important;
   line-height: 44px !important;
-  font-size: 14px;
+  font-size: 14px !important;
   color: var(--text) !important;
   -webkit-text-fill-color: var(--text) !important;
   opacity: 1 !important;
@@ -187,9 +208,36 @@ dialog::backdrop {
   margin-top: 6px;
 }
 
+/* ==========================================================================
+   SPACE GROTESK TECHNICAL ACCENTS
+   ========================================================================== */
+
+.eyebrow,
+.beta,
+.section-head .tag,
+.badge,
+.steps button span,
+#inspect-counter,
+.invoice-paper .inv-tag,
+.invoice-paper small,
+.preview-prompt-bar span,
+footer {
+  font-family: var(--font-accent);
+  letter-spacing: 0.8px;
+}
+
+.row-top strong,
+.total strong,
+.sum-row strong,
+#save-status,
+input[type="date"],
+.status-indicator-pill {
+  font-family: var(--font-accent);
+  font-variant-numeric: tabular-nums;
+}
 
 /* ==========================================================================
-   SECTION 2: HEADER & PRODUCTION DECK
+   SECTION 2: HEADER & PRODUCTION ISLAND
    ========================================================================== */
 
 .topbar {
@@ -252,10 +300,6 @@ dialog::backdrop {
   padding: 0 12px;
 }
 
-.setup-btn:hover {
-  border-color: var(--accent);
-}
-
 main {
   max-width: 1400px;
   margin: auto;
@@ -296,22 +340,26 @@ h1 span {
   color: var(--muted);
 }
 
+/* Production Island (Full Name Display + Clean Controls) */
 .project-deck {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 14px;
+  gap: 12px;
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: 10px;
-  padding: 8px 12px;
+  padding: 6px 12px;
   min-height: 48px;
+  box-sizing: border-box;
 }
 
 .deck-current {
   display: flex;
   align-items: center;
   gap: 8px;
+  min-width: 0;
+  flex: 1 1 auto;
 }
 
 .badge-dot {
@@ -324,49 +372,67 @@ h1 span {
 
 .deck-current strong {
   font-size: 13px;
+  font-weight: 700;
   color: #fff;
-  max-width: 180px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  max-width: 100%;
+  /* Allows full name expansion */
 }
 
 #save-status {
   font-size: 10px;
   color: var(--green);
-  margin-left: 4px;
+  margin-left: 2px;
   white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .deck-controls {
   display: flex;
   align-items: center;
   gap: 8px;
+  flex-shrink: 0;
 }
 
+/* Shoots Dropdown with Clean Restored Arrow */
 .switch-btn-wrap {
   position: relative;
-  width: 130px;
+  width: 96px;
 }
 
 .switch-btn-wrap select {
-  height: 34px !important;
-  min-height: 34px !important;
-  padding: 4px 26px 4px 10px !important;
+  height: 36px !important;
+  min-height: 36px !important;
+  line-height: 36px !important;
+  padding: 0 24px 0 10px !important;
   font-size: 12px !important;
+  font-weight: 600 !important;
   border-radius: 6px;
-  background: #252b2f;
-  border: 1px solid var(--line);
+  background-color: #252b2f !important;
+  border: 1px solid var(--line) !important;
+  color: var(--text) !important;
   cursor: pointer;
+  background-image: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="%238b979f" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>') !important;
+  background-repeat: no-repeat !important;
+  background-position: right 8px center !important;
+  background-size: 10px !important;
 }
 
-.deck-controls .action-btn {
-  height: 34px;
-  min-height: 34px;
-  padding: 0 10px;
-  font-size: 12px;
+.switch-btn-wrap select:hover {
+  border-color: var(--accent) !important;
+}
+
+.action-btn-icon-only {
+  width: 36px !important;
+  min-width: 36px !important;
+  height: 36px !important;
+  min-height: 36px !important;
+  padding: 0 !important;
+  font-size: 16px !important;
   border-radius: 6px;
-  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .steps {
@@ -395,7 +461,6 @@ h1 span {
 
 .steps button span {
   font-size: 11px;
-  font-family: monospace;
   color: var(--muted);
 }
 
@@ -409,9 +474,8 @@ h1 span {
   font-weight: bold;
 }
 
-
 /* ==========================================================================
-   SECTION 3: WORKSPACE & PROFILE VAULT CARD
+   SECTION 3: WORKSPACE & FORM ERGONOMICS
    ========================================================================== */
 
 .workspace {
@@ -433,13 +497,18 @@ h1 span {
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
-  gap: 12px;
+  gap: 16px;
   margin-bottom: 20px;
+}
+
+.section-head>div:first-child {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .section-head h2 {
   font-size: 19px;
-  font-weight: 600;
+  font-weight: 700;
   letter-spacing: -0.5px;
 }
 
@@ -447,6 +516,43 @@ h1 span {
   font-size: 12px;
   color: var(--muted);
   margin-top: 4px;
+  line-height: 1.4;
+}
+
+.section-head .tag {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 1.2px;
+  color: var(--muted);
+  text-transform: uppercase;
+  text-align: right;
+  white-space: pre-line;
+  line-height: 1.35;
+  opacity: 0.55;
+  flex-shrink: 0;
+  padding-top: 2px;
+  border: 0 !important;
+  background: transparent !important;
+}
+
+/* Fixed Baseline Alignment for Inline Actions */
+.inline-action-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 130px;
+  gap: 12px;
+  align-items: end;
+  /* Perfect bottom alignment with the input box */
+  margin-bottom: 18px;
+}
+
+.inline-action-row label {
+  margin-bottom: 0;
+}
+
+.inline-action-row button {
+  height: 44px !important;
+  min-height: 44px !important;
+  margin: 0 !important;
 }
 
 .form-grid {
@@ -504,14 +610,6 @@ h1 span {
   font-size: 14px;
 }
 
-.vault-top .action-btn {
-  height: 36px;
-  min-height: 36px;
-  padding: 0 14px;
-  font-size: 12px;
-  font-weight: 600;
-}
-
 .terms-due-cell {
   width: 100%;
 }
@@ -553,14 +651,13 @@ h1 span {
 .row-top strong {
   color: var(--accent);
   font-size: 14px;
-  font-family: monospace;
 }
 
 .remove {
   font-size: 11px;
-  padding: 4px 12px;
-  min-height: 32px;
-  height: 32px;
+  padding: 0 12px;
+  min-height: 36px;
+  height: 36px;
   background: transparent;
   color: #e58783;
   border-color: #553333;
@@ -568,6 +665,16 @@ h1 span {
 
 .remove:hover {
   background: #3d2323;
+}
+
+.danger-btn {
+  color: #e58783 !important;
+  border-color: #553333 !important;
+}
+
+.danger-btn:hover {
+  background: #3d2323 !important;
+  border-color: #774444 !important;
 }
 
 .check-pill {
@@ -597,9 +704,16 @@ h1 span {
   display: inline-block !important;
 }
 
+.actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 20px;
+  flex-wrap: wrap;
+}
+
 .receipt-card .actions button {
-  height: 38px !important;
-  min-height: 38px !important;
+  height: 44px !important;
+  min-height: 44px !important;
   font-size: 13px !important;
   padding: 0 16px !important;
   font-weight: 600;
@@ -632,6 +746,7 @@ h1 span {
   text-align: center;
   padding: 24px 16px;
   transition: border-color 0.2s ease, background 0.2s ease;
+  position: relative;
 }
 
 .upload-box.dragover {
@@ -658,12 +773,66 @@ h1 span {
   color: var(--muted);
 }
 
+.upload-progress-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(168, 195, 208, 0.15);
+  border: 1px solid var(--accent);
+  color: #fff;
+  border-radius: 20px;
+  padding: 6px 14px;
+  font-size: 12px;
+  font-weight: 600;
+  margin-bottom: 12px;
+  animation: pulse 1.6s infinite ease-in-out;
+}
+
+@keyframes pulse {
+
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+
+  50% {
+    opacity: 0.8;
+    transform: scale(0.98);
+  }
+}
+
 .file-actions-grid {
   display: flex;
   justify-content: center;
   gap: 12px;
   margin-top: 16px;
   flex-wrap: wrap;
+}
+
+.file-button {
+  position: relative !important;
+  overflow: hidden !important;
+  cursor: pointer !important;
+}
+
+.file-button input[type="file"],
+.upload-box input[type="file"],
+.deck-row input[type="file"] {
+  position: absolute !important;
+  top: 0 !important;
+  left: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+  opacity: 0 !important;
+  cursor: pointer !important;
+  z-index: 2 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: none !important;
+  background: transparent !important;
+  pointer-events: auto !important;
+  font-size: 0 !important;
 }
 
 .file-actions-grid .file-button,
@@ -673,11 +842,12 @@ h1 span {
   background: #252b2f !important;
   color: var(--text) !important;
   border-radius: 8px;
-  padding: 10px 18px;
+  padding: 0 16px;
   min-height: 44px;
   height: 44px;
-  font-size: 13px;
-  font-weight: 600;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -690,18 +860,11 @@ h1 span {
   border-color: var(--accent) !important;
 }
 
-.file-button input {
-  position: absolute;
-  opacity: 0;
-  width: 1px;
-  height: 1px;
-  pointer-events: none;
-}
-
 .btn-icon {
   width: 16px;
   height: 16px;
   fill: currentColor;
+  flex-shrink: 0;
 }
 
 .receipt-card {
@@ -781,25 +944,44 @@ h1 span {
   margin: 4px 0 14px;
 }
 
+/* ==========================================================================
+   STATUS INDICATOR PILL (SPACED & BREATHABLE)
+   ========================================================================== */
+
 .status-indicator-pill {
   font-size: 11px;
   font-weight: 600;
-  border-radius: 6px;
-  padding: 6px 10px;
-  margin: 10px 0 14px;
-  text-align: center;
+  border-radius: 20px;
+  padding: 6px 14px;
+  margin: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
   cursor: pointer;
-  transition: filter 0.1s ease;
+  white-space: nowrap;
+  letter-spacing: 0.02em;
+  transition: all 0.15s ease;
 }
 
-.status-indicator-pill:hover {
-  filter: brightness(1.15);
+.status-indicator-pill .pill-dot {
+  font-size: 10px;
+  opacity: 0.8;
+}
+
+.status-indicator-pill .pill-arrow {
+  font-size: 12px;
+  transition: transform 0.15s ease;
+}
+
+.status-indicator-pill:hover .pill-arrow {
+  transform: translateX(2px);
 }
 
 .status-indicator-pill.pending {
-  color: #dcb378;
-  background: rgba(220, 179, 120, 0.14);
-  border: 1px solid rgba(220, 179, 120, 0.35);
+  color: #e3b879;
+  background: rgba(227, 184, 121, 0.12);
+  border: 1px solid rgba(227, 184, 121, 0.35);
 }
 
 .status-indicator-pill.verified {
@@ -837,9 +1019,8 @@ footer {
   color: var(--muted);
 }
 
-
 /* ==========================================================================
-   SECTION 4: INVOICE PAPER & ARCHITECTURAL PRESETS
+   SECTION 4: INVOICE DECK & FULL-ROW ACTIONS
    ========================================================================== */
 
 .swatch-group {
@@ -866,27 +1047,35 @@ footer {
   box-shadow: 0 0 10px rgba(255, 255, 255, 0.4);
 }
 
+/* Full Row Twin Buttons */
 .deck-row {
   display: flex;
-  gap: 12px;
+  gap: 10px;
   align-items: center;
-  margin-top: 16px;
-  flex-wrap: wrap;
+  margin-top: 14px;
+  width: 100%;
 }
 
-.file-button.deck-btn {
+.deck-row .file-button.deck-btn,
+.deck-row button {
+  flex: 1 1 0;
+  width: 100%;
   background: #252b2f !important;
   color: #f0f4f6 !important;
   border: 1px solid var(--line) !important;
   font-weight: 600;
-  padding: 10px 16px;
+  padding: 0 14px;
   min-height: 44px;
   height: 44px;
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 8px;
   cursor: pointer;
   border-radius: 8px;
+  font-size: 12px;
+  letter-spacing: 0.3px;
+  box-sizing: border-box;
 }
 
 .invoice-action-bar {
@@ -898,7 +1087,7 @@ footer {
 
 .invoice-action-bar button {
   flex: 1;
-  min-width: 140px;
+  min-width: 130px;
   height: 44px;
   display: inline-flex;
   align-items: center;
@@ -916,8 +1105,10 @@ footer {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 8px;
   margin: 22px 0 10px;
   padding: 0 4px;
+  flex-wrap: wrap;
 }
 
 .preview-prompt-bar span {
@@ -926,6 +1117,7 @@ footer {
   text-transform: uppercase;
   color: var(--muted);
   font-weight: 600;
+  white-space: nowrap;
 }
 
 .edit-zoom-pill {
@@ -934,12 +1126,13 @@ footer {
   color: var(--accent);
   background: rgba(168, 195, 208, 0.12);
   border: 1px solid rgba(168, 195, 208, 0.3);
-  padding: 6px 14px;
+  padding: 5px 12px;
   border-radius: 20px;
   cursor: pointer;
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
+  white-space: nowrap;
 }
 
 .preview-viewport-box {
@@ -970,7 +1163,7 @@ footer {
   width: 680px;
   min-width: 680px;
   box-shadow: 0 4px 28px rgba(0, 0, 0, 0.45);
-  font: 12px/1.65 WrapKorean, -apple-system, BlinkMacSystemFont, sans-serif;
+  font: 12px/1.65 var(--font-body);
   border-radius: 4px;
   box-sizing: border-box;
 }
@@ -994,7 +1187,7 @@ footer {
   padding: 1px 4px;
 }
 
-/* Header */
+/* Invoice Header */
 .invoice-paper .invoice-header {
   display: flex;
   justify-content: space-between;
@@ -1213,7 +1406,7 @@ dialog#invoice-zoom-modal {
   max-height: 100dvh;
   border: 0;
   border-radius: 0;
-  background: transparent;
+  background: #141618;
   padding: 0;
   margin: 0;
   overflow: hidden;
@@ -1258,16 +1451,12 @@ dialog#invoice-zoom-modal[open] {
   overflow-y: auto;
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
-  padding: 24px 16px calc(50px + env(safe-area-inset-bottom));
+  padding: 16px 12px calc(50px + env(safe-area-inset-bottom));
   display: flex;
   justify-content: center;
   align-items: flex-start;
   background: rgba(13, 15, 16, 0.95);
-  cursor: pointer;
-}
-
-.zoom-modal-body>.invoice-paper {
-  cursor: default;
+  box-sizing: border-box;
 }
 
 dialog#receipt-inspect-modal {
@@ -1300,10 +1489,26 @@ dialog#receipt-inspect-modal[open] {
   flex-shrink: 0;
 }
 
-.inspect-header span {
-  font-weight: 600;
-  font-size: 13px;
-  color: var(--text);
+.inspect-nav-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.inspect-nav-btn {
+  height: 36px !important;
+  min-height: 36px !important;
+  padding: 0 12px !important;
+  font-size: 12px !important;
+  border-radius: 6px;
+}
+
+#inspect-counter {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--accent);
+  min-width: 55px;
+  text-align: center;
 }
 
 .inspect-body {
@@ -1312,6 +1517,7 @@ dialog#receipt-inspect-modal[open] {
   grid-template-columns: 1fr 1fr;
   overflow: hidden;
   background: #101214;
+  touch-action: pan-y;
 }
 
 .inspect-img-pane {
@@ -1338,69 +1544,6 @@ dialog#receipt-inspect-modal[open] {
   -webkit-overflow-scrolling: touch;
 }
 
-.invoice-theme-swiss .swiss-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-end;
-  border-bottom: 2px solid #000;
-  padding-bottom: 14px;
-  margin-bottom: 20px;
-}
-
-.invoice-theme-swiss .swiss-head h2 {
-  margin: 0;
-  font-size: 20px;
-  font-weight: 900;
-}
-
-.invoice-theme-swiss .swiss-head h1 {
-  margin: 0;
-  font-size: 18px;
-}
-
-.invoice-theme-swiss .swiss-quad {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 12px;
-  padding-bottom: 16px;
-  border-bottom: 1px solid #ddd;
-  margin-bottom: 16px;
-}
-
-.invoice-theme-swiss .swiss-quad small {
-  font-size: 8px;
-  color: #888;
-  letter-spacing: 1px;
-  display: block;
-}
-
-.invoice-theme-field .field-banner {
-  background: #111;
-  color: #fff;
-  font-family: monospace;
-  font-size: 10px;
-  font-weight: 700;
-  padding: 6px 10px;
-  display: flex;
-  justify-content: space-between;
-  margin-bottom: 16px;
-}
-
-.invoice-theme-field .field-trio {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 10px;
-  border: 1px solid #222;
-  padding: 10px;
-  margin-bottom: 20px;
-}
-
-.invoice-theme-field .field-trio small {
-  font-size: 8px;
-  color: #666;
-  display: block;
-}
-
 .exporting {
   width: 760px !important;
   min-width: 760px !important;
@@ -1415,9 +1558,8 @@ dialog#receipt-inspect-modal[open] {
   -webkit-column-break-inside: avoid !important;
 }
 
-
 /* ==========================================================================
-   SECTION 5: MOBILE APP RESPONSIVE MODE (≤ 760px)
+   SECTION 5: MOBILE SPECIFIC OPTIMIZATIONS (≤ 760px)
    ========================================================================== */
 
 @media (max-width: 1050px) {
@@ -1452,7 +1594,6 @@ dialog#receipt-inspect-modal[open] {
 
   .topbar {
     min-height: calc(56px + env(safe-area-inset-top));
-    height: auto;
     padding-top: max(12px, env(safe-area-inset-top));
     padding-left: max(16px, env(safe-area-inset-left));
     padding-right: max(16px, env(safe-area-inset-right));
@@ -1495,15 +1636,16 @@ dialog#receipt-inspect-modal[open] {
   .project-deck {
     width: 100%;
     max-width: 100%;
-    padding: 8px 10px;
+    padding: 6px 10px;
   }
 
+  /* Allows full text visibility on mobile deck without premature cut-off */
   .deck-current strong {
-    max-width: 130px;
+    max-width: 100%;
   }
 
   .switch-btn-wrap {
-    width: 110px;
+    width: 90px;
   }
 
   .steps {
@@ -1553,6 +1695,11 @@ dialog#receipt-inspect-modal[open] {
     border-radius: 12px;
   }
 
+  .inline-action-row {
+    grid-template-columns: 1fr 110px;
+    gap: 8px;
+  }
+
   .form-grid {
     grid-template-columns: 1fr !important;
     gap: 14px;
@@ -1564,6 +1711,7 @@ dialog#receipt-inspect-modal[open] {
     gap: 8px !important;
   }
 
+  /* Compact Clean Bottom Summary Dock */
   .summary {
     position: fixed !important;
     bottom: 0 !important;
@@ -1586,6 +1734,7 @@ dialog#receipt-inspect-modal[open] {
     flex-direction: row !important;
     justify-content: space-between !important;
     align-items: center !important;
+    gap: 8px !important;
     box-sizing: border-box !important;
   }
 
@@ -1602,32 +1751,49 @@ dialog#receipt-inspect-modal[open] {
     border: 0 !important;
     padding: 0 !important;
     margin: 0 !important;
+    flex-shrink: 0;
   }
 
   .summary .total span {
-    font-size: 9px;
+    font-size: 8px;
     letter-spacing: 1px;
     color: #8fa0aa;
   }
 
   .summary .total strong {
-    font-size: 19px;
+    font-size: 17px;
     color: var(--accent);
     line-height: 1.1;
     margin: 2px 0 0;
   }
 
+  .summary .status-indicator-pill {
+    padding: 6px 12px !important;
+    font-size: 11px !important;
+    max-width: 140px;
+  }
+
   .summary button.primary {
-    min-height: 42px !important;
-    height: 42px !important;
-    font-size: 13px;
-    padding: 0 16px;
+    min-height: 38px !important;
+    height: 38px !important;
+    font-size: 12px;
+    padding: 0 14px;
     border-radius: 8px;
     margin: 0;
     width: auto !important;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
+    flex-shrink: 0;
+  }
+
+  .zoom-modal-body {
+    padding: 12px 8px calc(60px + env(safe-area-inset-bottom));
+    display: block;
+    overflow-x: hidden;
+  }
+
+  .zoom-modal-body>.invoice-paper {
+    transform-origin: top left;
+    width: 680px;
+    min-width: 680px;
   }
 
   dialog#receipt-inspect-modal {

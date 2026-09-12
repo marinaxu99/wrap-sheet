@@ -6,6 +6,11 @@ import { compressImage, parseReceiptImage } from './receipt.js';
 const $ = s => document.querySelector(s);
 let state, projects = [], templates = [], images = new Map(), tab = 'project', saveChain = Promise.resolve(), revision = 0, scanBusy = false, renderBusy = false, messageTimer = null;
 let profileEditing = false;
+let inspectingExpenseId = null;
+
+let uploadProgress = { active: false, current: 0, total: 0 };
+let touchStartX = 0;
+let touchStartY = 0;
 
 const SWATCHES = [
   { name: 'Arki Slate', color: '#a8c3d0', desc: 'Cool Field Neutral' },
@@ -112,16 +117,17 @@ function updatePicker() {
   const title = state.project.projectTitle || 'Untitled production';
   if ($('#deck-current-title')) $('#deck-current-title').textContent = title;
   if (!picker) return;
-  picker.innerHTML = `<option value="" disabled selected>Switch Shoot ▾</option>` +
+  picker.innerHTML = `<option value="" disabled selected>Shoots</option>` +
     projects.map(p => `<option value="${p.id}">${e(p.project.projectTitle || 'Untitled production')}</option>`).join('');
 }
 
 function updateStickyActionBar() {
   const btn = $('#primary-action-btn');
   if (!btn) return;
-  if (tab === 'project') btn.textContent = 'Next: Add Work →';
-  else if (tab === 'work') btn.textContent = 'Next: Add Receipts →';
-  else if (tab === 'receipts') btn.textContent = 'Review Invoice →';
+  const isMobile = window.innerWidth <= 760;
+  if (tab === 'project') btn.textContent = isMobile ? 'Next →' : 'Next: Add Work →';
+  else if (tab === 'work') btn.textContent = isMobile ? 'Next →' : 'Next: Add Receipts →';
+  else if (tab === 'receipts') btn.textContent = isMobile ? 'Review →' : 'Review Invoice →';
   else if (tab === 'invoice') btn.textContent = 'Export PDF';
 }
 
@@ -144,7 +150,9 @@ function summary() {
     } else if (pending > 0) {
       statusPill.hidden = false;
       statusPill.className = 'status-indicator-pill pending';
-      statusPill.textContent = `○ ${pending} receipt${pending === 1 ? '' : 's'} awaiting review →`;
+      statusPill.innerHTML = window.innerWidth <= 760
+        ? `<span class="pill-dot">○</span> ${pending} to review <span class="pill-arrow">→</span>`
+        : `<span class="pill-dot">○</span> ${pending} receipt${pending === 1 ? '' : 's'} awaiting review <span class="pill-arrow">→</span>`;
       statusPill.onclick = () => {
         go('receipts');
         setTimeout(() => {
@@ -155,7 +163,9 @@ function summary() {
     } else {
       statusPill.hidden = false;
       statusPill.className = 'status-indicator-pill verified';
-      statusPill.textContent = `✓ All ${state.expenses.length} receipts verified · Audit ready`;
+      statusPill.innerHTML = window.innerWidth <= 760
+        ? `<span class="pill-dot">✓</span> All verified`
+        : `<span class="pill-dot">✓</span> All ${state.expenses.length} receipts verified · Audit ready`;
       statusPill.onclick = null;
     }
   }
@@ -208,7 +218,7 @@ function projectView() {
         </label>
       </div>
       ${area('Client address', 'project.clientAddress')}
-    </div>`, 'PRODUCTION DETAILS') +
+    </div>`, 'PRODUCTION\nDETAILS') +
 
     panel('Contractor Profile Vault', 'Your verified contractor credentials. Locked to prevent accidental changes.',
       `<div class="profile-vault-card ${isLocked ? 'locked' : 'editing'}">
@@ -232,12 +242,14 @@ function projectView() {
           ${field('Account Number', 'contractor.accountNumber', 'text', isLocked ? 'disabled' : '')}
           ${area('Payment Terms', 'contractor.paymentTerms', isLocked ? 'disabled' : '')}
         </div>
-      </div>`, 'PROFILE VAULT');
+      </div>`, 'PROFILE\nVAULT');
 }
 
 const laborTypes = ['Shoot Day', 'Prep Day', 'Travel Day', 'Half Day', 'Overtime', 'Kit Rental', 'Equipment Rental', 'Assistant', 'Post-production', 'Other'];
 
 function workView() {
+  const rateStep = state.project.currency === 'KRW' ? '1000' : 'any';
+
   return panel('Every hour. Every piece of kit.', 'Build your agreed day rates and equipment fees.',
     `<div class="inline-action-row">
       <label>Add a work item
@@ -255,24 +267,25 @@ function workView() {
           ${field('Description', `labor.${i}.description`)}
           ${field('Work date', `labor.${i}.date`, 'date')}
           ${select('Unit', `labor.${i}.unit`, ['day', 'hour', 'item', 'km', 'mile'])}
-          ${field('Quantity', `labor.${i}.quantity`, 'number', 'min="0" max="1000000" step="0.01"')}
-          ${field(`Rate (${state.project.currency})`, `labor.${i}.rate`, 'number', 'min="0" max="1000000000000" step="any"')}
+          ${field('Quantity', `labor.${i}.quantity`, 'number', 'min="0" max="1000000" step="0.5"')}
+          ${field(`Rate (${state.project.currency})`, `labor.${i}.rate`, 'number', `min="0" max="1000000000000" step="${rateStep}"`)}
         </div>
         <label class="check-pill">
           <input type="checkbox" data-field="labor.${i}.taxable" ${r.taxable ? 'checked' : ''}>
           <span>Taxable item</span>
         </label>
-      </div>`).join('') : '<div class="empty">No work logged yet. Add your first shoot day above.</div>'}
+      </div>`).join('') : '<div class="empty" style="padding:20px 0; color:var(--muted);">No work logged yet. Add your first shoot day above.</div>'}
     <div class="form-grid" style="margin-top:20px;">
-      ${field('Tax on taxable work (%)', 'project.taxRate', 'number', 'min="0" max="100" step="0.01"')}
+      ${field('Tax on taxable work (%)', 'project.taxRate', 'number', 'min="0" max="100" step="0.1" placeholder="e.g. 3.3 or 10"')}
     </div>
-    <div class="actions">
+    <div class="actions" style="margin-top: 24px;">
       <button class="primary" data-go="receipts">Continue to receipts →</button>
-    </div>`, 'WORK LOG');
+    </div>`, 'WORK\nLOG');
 }
 
 function receiptView() {
   const hasApiKey = Boolean(setting('apiKey'));
+  const amountStep = state.project.currency === 'KRW' ? '1000' : 'any';
 
   return panel('Proof, without the paperwork.', 'Upload slips as you get them. Only verified receipts enter the invoice.',
     `${!hasApiKey ? `<div class="ocr-notice-bar">
@@ -284,22 +297,35 @@ function receiptView() {
       </svg>
       <h3>Drop the admin. Keep the receipt.</h3>
       <p>Supports Hi-Pass tolls, parking, and catering slips</p>
+
+      ${uploadProgress.active ? `
+        <div style="margin-top: 14px;">
+          <span class="upload-progress-badge">
+            <span class="badge-dot" style="background:#fff;"></span>
+            Processing receipt ${uploadProgress.current} of ${uploadProgress.total} with Gemini 2.5 Flash…
+          </span>
+        </div>
+      ` : ''}
+
       <div class="file-actions-grid">
         <label class="file-button">
           <svg class="btn-icon" viewBox="0 0 24 24"><path d="M12 15.2a3.2 3.2 0 100-6.4 3.2 3.2 0 000 6.4z"/><path d="M9 2L7.17 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2h-3.17L15 2H9zm3 15c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5z"/></svg>
-          Scan with Camera
+          SCAN WITH CAMERA
           <input id="camera-input" type="file" accept="image/*" capture="environment">
         </label>
         <label class="file-button">
           <svg class="btn-icon" viewBox="0 0 24 24"><path d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM14 13v4h-4v-4H7l5-5 5 5h-3z"/></svg>
-          Upload Files
+          UPLOAD FILES
           <input id="receipt-input" type="file" accept="image/*" multiple>
         </label>
-        <button data-action="manual-receipt">＋ Manual Entry</button>
+        <button data-action="manual-receipt">
+          <svg class="btn-icon" viewBox="0 0 24 24"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
+          MANUAL ENTRY
+        </button>
       </div>
     </div>
     <div class="actions" style="margin: 16px 0 8px;">
-      <span class="hint">${state.expenses.length} receipts logged · Tap thumbnail to inspect proof</span>
+      <span class="hint">${state.expenses.length} receipts logged · Tap thumbnail to inspect proof & swipe</span>
     </div>
     ${state.expenses.map((r, i) => `
       <div class="row-card">
@@ -309,19 +335,19 @@ function receiptView() {
         </div>
         <div class="receipt-card">
           <div>
-            ${images.get(r.receiptId) ? `<img class="receipt-image" src="${e(images.get(r.receiptId).imageThumbnail)}" alt="Receipt" data-inspect-id="${r.id}" style="cursor:pointer;" title="Tap to inspect">` : '<div class="empty">Manual</div>'}
+            ${images.get(r.receiptId) ? `<img class="receipt-image" src="${e(images.get(r.receiptId).imageThumbnail)}" alt="Receipt" data-inspect-id="${r.id}" style="cursor:pointer;" title="Tap to inspect">` : '<div class="empty" style="padding:18px 0; text-align:center; font-size:11px; color:var(--muted); background:#101213; border-radius:8px;">Manual</div>'}
           </div>
           <div>
             <div class="form-grid">
               ${field('Vendor / 거래처', `expenses.${i}.vendor`)}
               ${field('Date / 날짜', `expenses.${i}.date`, 'date')}
-              ${field('Total paid / 합계', `expenses.${i}.total`, 'number', 'min="0" step="any"')}
-              ${field('Included VAT / 부가세', `expenses.${i}.vat`, 'number', 'min="0" step="any"')}
+              ${field('Total paid / 합계', `expenses.${i}.total`, 'number', `min="0" step="${amountStep}"`)}
+              ${field('Included VAT / 부가세', `expenses.${i}.vat`, 'number', `min="0" step="${amountStep}"`)}
               ${field('Category', `expenses.${i}.category`)}
               ${select('Currency', `expenses.${i}.currency`, [['', 'Choose'], ['KRW', 'KRW'], ['USD', 'USD'], ['EUR', 'EUR']])}
             </div>
-            ${r.warning ? `<p class="notice">${e(r.warning)}</p>` : ''}
-            <div class="actions">
+            ${r.warning ? `<p class="notice" style="color:#dcb378; font-size:11px; margin-top:8px;">${e(r.warning)}</p>` : ''}
+            <div class="actions" style="margin-top: 18px;">
               ${!r.verified
         ? `<button class="primary" data-action="confirm-receipt" data-id="${r.id}">Confirm expense</button>`
         : `<button class="action-btn" data-action="unconfirm-receipt" data-id="${r.id}">Edit expense</button>`
@@ -334,9 +360,9 @@ function receiptView() {
           </div>
         </div>
       </div>`).join('')}
-    <div class="actions">
+    <div class="actions" style="margin-top: 24px;">
       <button class="primary" data-go="invoice">Review invoice →</button>
-    </div>`);
+    </div>`, 'RECEIPTS\nPROOF');
 }
 
 function invoiceView() {
@@ -363,13 +389,13 @@ function invoiceView() {
             `).join('')}
           </div>
         </div>
-      </div>`, 'LAYOUT ARCHETYPE') +
+      </div>`, 'LAYOUT\nARCHETYPE') +
 
-    panel('Export Options & Branding', 'Control PDF attachments, logo, and document exports.',
+    panel('Export Options & Storage', 'Manage PDF options, branding, and local shoot storage.',
       `<div class="invoice-options-deck">
         <label class="check-pill full">
           <input type="checkbox" data-field="invoice.options.showReceiptGallery" ${showGallery ? 'checked' : ''}>
-          <span>Include receipt proof gallery in PDF (Uncheck if using Google Drive)</span>
+          <span>Attach receipt proof gallery to PDF</span>
         </label>
 
         <div class="deck-row">
@@ -382,7 +408,7 @@ function invoiceView() {
 
           <label class="file-button deck-btn">
             <svg class="btn-icon" viewBox="0 0 24 24"><path d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z"/></svg>
-            Upload Custom HTML
+            Upload HTML
             <input type="file" id="template-input" accept=".html,text/html">
           </label>
         </div>
@@ -406,15 +432,19 @@ function invoiceView() {
         </button>
         <button data-action="clone-project">
           <svg class="btn-icon" viewBox="0 0 24 24"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
-          Duplicate Shoot
+          Duplicate
+        </button>
+        <button class="danger-btn" data-action="delete-project">
+          <svg class="btn-icon" viewBox="0 0 24 24"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
+          Delete Shoot
         </button>
       </div>
-      <p id="export-status" role="status" class="hint"></p>`, 'DOCUMENT ACTIONS') +
+      <p id="export-status" role="status" class="hint"></p>`, 'DOCUMENT\nACTIONS') +
 
     `<!-- Proportional Scaled Viewport -->
     <div class="preview-prompt-bar">
-      <span>Live Sheet Preview</span>
-      <span class="edit-zoom-pill" id="open-zoom-modal">🔍 Tap to View & Edit Full Size</span>
+      <span>Live Preview</span>
+      <span class="edit-zoom-pill" id="open-zoom-modal">🔍 Full Size</span>
     </div>
     <div class="preview-viewport-box" id="scaler-viewport" title="Tap to expand and edit">
       <div class="preview-scaler-stage" id="scaler-stage">
@@ -462,18 +492,31 @@ function preview() {
   requestAnimationFrame(() => {
     const viewport = $('#scaler-viewport');
     const stage = $('#scaler-stage');
-    if (!viewport || !stage) return;
+    if (viewport && stage) {
+      const availableWidth = viewport.clientWidth - 32;
+      const baseWidth = 680;
 
-    const availableWidth = viewport.clientWidth - 32;
-    const baseWidth = 680;
+      if (availableWidth > 0 && availableWidth < baseWidth) {
+        const scale = availableWidth / baseWidth;
+        stage.style.transform = `scale(${scale})`;
+        stage.style.marginBottom = `-${(stage.offsetHeight * (1 - scale))}px`;
+      } else {
+        stage.style.transform = 'none';
+        stage.style.marginBottom = '0px';
+      }
+    }
 
-    if (availableWidth > 0 && availableWidth < baseWidth) {
-      const scale = availableWidth / baseWidth;
-      stage.style.transform = `scale(${scale})`;
-      stage.style.marginBottom = `-${(stage.offsetHeight * (1 - scale))}px`;
-    } else {
-      stage.style.transform = 'none';
-      stage.style.marginBottom = '0px';
+    const modalContent = $('#invoice-modal-content');
+    const modalBackdrop = $('#invoice-modal-backdrop');
+    if (modalContent && modalBackdrop && window.innerWidth <= 760) {
+      const availModalWidth = window.innerWidth - 24;
+      const baseWidth = 680;
+      const modalScale = Math.min(1, availModalWidth / baseWidth);
+      modalContent.style.transform = `scale(${modalScale})`;
+      modalContent.style.marginBottom = `-${modalContent.offsetHeight * (1 - modalScale)}px`;
+    } else if (modalContent) {
+      modalContent.style.transform = 'none';
+      modalContent.style.marginBottom = '0px';
     }
   });
 }
@@ -500,6 +543,9 @@ async function go(next) {
   location.hash = next;
   message('');
   render();
+  if (next === 'invoice') {
+    setTimeout(preview, 60);
+  }
 }
 
 function updateField(path, value, element) {
@@ -535,70 +581,91 @@ async function loadProject(id) {
   render();
 }
 
-async function addPhoto(file) {
-  const full = await compressImage(file, 1200, 0.82);
-  const thumb = await compressImage(file, 400, 0.72);
-  const record = { id: uid(), projectId: state.id, imageFull: full, imageThumbnail: thumb, name: file.name };
-  await db.put('receipts', record);
-  images.set(record.id, record);
+async function handleBatchUpload(files) {
+  if (!files || files.length === 0) return;
+  const imageFiles = [...files].filter(f => f.type.startsWith('image/'));
+  if (imageFiles.length === 0) return;
+
+  uploadProgress = { active: true, current: 0, total: imageFiles.length };
+  scanBusy = true;
+  render();
 
   const apiKey = setting('apiKey');
-  if (navigator.onLine && apiKey) {
-    scanBusy = true;
+  let extractedCount = 0;
+
+  for (let i = 0; i < imageFiles.length; i++) {
+    const file = imageFiles[i];
+    uploadProgress.current = i + 1;
+    message(`Processing receipt ${i + 1} of ${imageFiles.length} with Gemini 2.5 Flash…`, true);
     render();
-    message('Reading items with Gemini 2.5 Flash…', true);
+
     try {
-      const items = await parseReceiptImage(full, apiKey, state.project.currency);
-      for (const item of items) {
+      const full = await compressImage(file, 1200, 0.82);
+      const thumb = await compressImage(file, 400, 0.72);
+      const record = { id: uid(), projectId: state.id, imageFull: full, imageThumbnail: thumb, name: file.name };
+      await db.put('receipts', record);
+      images.set(record.id, record);
+
+      if (navigator.onLine && apiKey) {
+        try {
+          const items = await parseReceiptImage(full, apiKey, state.project.currency);
+          for (const item of items) {
+            state.expenses.unshift({
+              id: uid(),
+              receiptId: record.id,
+              vendor: item.vendor,
+              date: item.date,
+              total: item.total,
+              vat: item.vat,
+              currency: item.currency,
+              category: item.category,
+              verified: false,
+              warning: item.warning
+            });
+            extractedCount++;
+          }
+        } catch (ocrErr) {
+          state.expenses.unshift({
+            id: uid(),
+            receiptId: record.id,
+            vendor: '',
+            date: '',
+            total: '',
+            vat: '',
+            currency: state.project.currency,
+            category: '',
+            verified: false,
+            warning: 'Could not auto-scan'
+          });
+        }
+      } else {
         state.expenses.unshift({
           id: uid(),
           receiptId: record.id,
-          vendor: item.vendor,
-          date: item.date,
-          total: item.total,
-          vat: item.vat,
-          currency: item.currency,
-          category: item.category,
+          vendor: '',
+          date: '',
+          total: '',
+          vat: '',
+          currency: state.project.currency,
+          category: '',
           verified: false,
-          warning: item.warning
+          warning: ''
         });
       }
-      message(`${items.length} item(s) extracted. Review and confirm.`);
-    } catch (e) {
-      state.expenses.unshift({
-        id: uid(),
-        receiptId: record.id,
-        vendor: '',
-        date: '',
-        total: '',
-        vat: '',
-        currency: state.project.currency,
-        category: '',
-        verified: false,
-        warning: 'Could not auto-scan'
-      });
-      fail(e);
-    } finally {
-      scanBusy = false;
-      await save();
-      render();
+    } catch (err) {
+      fail(err);
     }
+  }
+
+  uploadProgress.active = false;
+  scanBusy = false;
+  await save();
+  render();
+
+  if (apiKey) {
+    message(`Batch complete: ${extractedCount} item(s) extracted from ${imageFiles.length} receipt(s).`);
   } else {
-    state.expenses.unshift({
-      id: uid(),
-      receiptId: record.id,
-      vendor: '',
-      date: '',
-      total: '',
-      vat: '',
-      currency: state.project.currency,
-      category: '',
-      verified: false,
-      warning: ''
-    });
-    await save();
-    render();
-    message('Receipt photo saved.');
+    message(`${imageFiles.length} receipt photo(s) saved.`);
   }
 }
 
@@ -629,32 +696,57 @@ async function scan(id) {
 
 function openInspector(expenseId) {
   const r = state.expenses.find(x => x.id === expenseId);
-  if (!r || !r.receiptId) return;
-  const imgRecord = images.get(r.receiptId);
-  if (!imgRecord) return;
+  if (!r) return;
+  inspectingExpenseId = expenseId;
 
   const modal = $('#receipt-inspect-modal');
   const imgTarget = $('#inspect-img-target');
   const formTarget = $('#inspect-form-target');
+  const counterEl = $('#inspect-counter');
+  const prevBtn = $('#inspect-prev-btn');
+  const nextBtn = $('#inspect-next-btn');
 
   const idx = state.expenses.findIndex(x => x.id === expenseId);
+  const total = state.expenses.length;
 
-  imgTarget.src = imgRecord.imageFull;
+  if (counterEl) counterEl.textContent = `#${idx + 1} of ${total}`;
+  if (prevBtn) prevBtn.disabled = (idx >= total - 1);
+  if (nextBtn) nextBtn.disabled = (idx <= 0);
+
+  const imgRecord = r.receiptId ? images.get(r.receiptId) : null;
+  imgTarget.src = imgRecord ? imgRecord.imageFull : '';
+  imgTarget.alt = imgRecord ? 'Receipt proof' : 'Manual entry (no image)';
+
+  const amountStep = state.project.currency === 'KRW' ? '1000' : 'any';
+
   formTarget.innerHTML = `
     <h3 style="margin-bottom:12px; font-size:16px;">Verify Line Item #${idx + 1}</h3>
     <div class="form-grid" style="grid-template-columns:1fr; gap:12px;">
       ${field('Vendor / 거래처', `expenses.${idx}.vendor`)}
       ${field('Date / 날짜', `expenses.${idx}.date`, 'date')}
-      ${field('Total paid / 합계', `expenses.${idx}.total`, 'number', 'min="0" step="any"')}
-      ${field('Included VAT / 부가세', `expenses.${idx}.vat`, 'number', 'min="0" step="any"')}
+      ${field('Total paid / 합계', `expenses.${idx}.total`, 'number', `min="0" step="${amountStep}"`)}
+      ${field('Included VAT / 부가세', `expenses.${idx}.vat`, 'number', `min="0" step="${amountStep}"`)}
       ${field('Category', `expenses.${idx}.category`)}
     </div>
     <div style="margin-top:20px; display:flex; gap:10px;">
-      <button class="primary" data-action="confirm-receipt" data-id="${r.id}">Confirm & Verify</button>
+      <button class="primary" data-action="confirm-receipt" data-id="${r.id}">
+        ${r.verified ? '✓ Already Verified' : 'Confirm & Verify'}
+      </button>
     </div>
   `;
 
-  modal.showModal();
+  if (!modal.open) modal.showModal();
+}
+
+function navigateInspector(delta) {
+  if (!inspectingExpenseId || !state.expenses.length) return;
+  const currentIdx = state.expenses.findIndex(x => x.id === inspectingExpenseId);
+  if (currentIdx === -1) return;
+
+  const nextIdx = currentIdx + delta;
+  if (nextIdx >= 0 && nextIdx < state.expenses.length) {
+    openInspector(state.expenses[nextIdx].id);
+  }
 }
 
 async function exportPDF() {
@@ -745,8 +837,16 @@ const actions = {
     r.verified = true;
     await save();
     message('Expense verified and included in total.');
+
     const inspectModal = $('#receipt-inspect-modal');
-    if (inspectModal && inspectModal.open) inspectModal.close();
+    if (inspectModal && inspectModal.open) {
+      const remainingUnverified = state.expenses.filter(x => !x.verified);
+      if (remainingUnverified.length > 0) {
+        openInspector(remainingUnverified[0].id);
+      } else {
+        inspectModal.close();
+      }
+    }
     render();
   },
   'unconfirm-receipt': async id => {
@@ -759,7 +859,6 @@ const actions = {
     }
   },
   'remove-receipt': async id => {
-    const r = state.expenses.find(r => r.id === id);
     state.expenses = state.expenses.filter(r => r.id !== id);
     await save();
     render();
@@ -806,6 +905,42 @@ Total Due: ${money(t.total, c)}`;
     projects.push(clone);
     await loadProject(clone.id);
     message('Shoot duplicated.');
+  },
+  'delete-project': async () => {
+    const title = state.project.projectTitle || 'this shoot';
+    const confirmed = confirm(`Are you sure you want to permanently delete "${title}"? This clears all its associated receipts and data.`);
+    if (!confirmed) return;
+
+    try {
+      // 1. Delete associated receipts from IndexedDB
+      for (const r of state.expenses) {
+        if (r.receiptId) {
+          await db.del('receipts', r.receiptId).catch(() => { });
+        }
+      }
+      // 2. Delete project from IndexedDB
+      await db.del('projects', state.id).catch(() => { });
+
+      projects = projects.filter(p => p.id !== state.id);
+
+      // 3. Switch to another project or create a clean one
+      if (projects.length > 0) {
+        await loadProject(projects[0].id);
+        message(`"${title}" deleted. Switched to ${projects[0].project.projectTitle || 'production'}.`);
+      } else {
+        state = newProject();
+        const savedContractor = localStorage.getItem('wrapsheet.defaultContractor');
+        if (savedContractor) {
+          try { state.contractor = { ...state.contractor, ...JSON.parse(savedContractor) }; } catch { }
+        }
+        await save();
+        setSetting('currentProjectId', state.id);
+        render();
+        message(`"${title}" deleted.`);
+      }
+    } catch (err) {
+      fail(err);
+    }
   }
 };
 
@@ -831,9 +966,45 @@ function initDragAndDrop() {
 
   dropzone.addEventListener('drop', async e => {
     const files = [...e.dataTransfer.files].filter(f => f.type.startsWith('image/'));
-    for (const file of files) await addPhoto(file);
+    await handleBatchUpload(files);
   });
 }
+
+function initSwipeListeners() {
+  const swipeArea = $('#inspect-swipe-area');
+  if (!swipeArea) return;
+
+  swipeArea.addEventListener('touchstart', e => {
+    touchStartX = e.changedTouches[0].screenX;
+    touchStartY = e.changedTouches[0].screenY;
+  }, { passive: true });
+
+  swipeArea.addEventListener('touchend', e => {
+    const touchEndX = e.changedTouches[0].screenX;
+    const touchEndY = e.changedTouches[0].screenY;
+    const diffX = touchEndX - touchStartX;
+    const diffY = touchEndY - touchStartY;
+
+    if (Math.abs(diffX) > 45 && Math.abs(diffX) > Math.abs(diffY)) {
+      if (diffX < 0) {
+        navigateInspector(-1);
+      } else {
+        navigateInspector(1);
+      }
+    }
+  }, { passive: true });
+}
+
+window.addEventListener('keydown', e => {
+  const modal = $('#receipt-inspect-modal');
+  if (!modal || !modal.open) return;
+
+  if (e.key === 'ArrowLeft') {
+    navigateInspector(1);
+  } else if (e.key === 'ArrowRight') {
+    navigateInspector(-1);
+  }
+});
 
 document.addEventListener('click', async event => {
   const b = event.target.closest('button') || event.target.closest('a[data-action]');
@@ -844,8 +1015,19 @@ document.addEventListener('click', async event => {
     return;
   }
 
+  if (event.target.closest('#inspect-prev-btn')) {
+    navigateInspector(1);
+    return;
+  }
+
+  if (event.target.closest('#inspect-next-btn')) {
+    navigateInspector(-1);
+    return;
+  }
+
   if (event.target.closest('#close-inspect-modal')) {
     $('#receipt-inspect-modal')?.close();
+    inspectingExpenseId = null;
     return;
   }
 
@@ -953,7 +1135,7 @@ document.addEventListener('change', async event => {
     if (['camera-input', 'receipt-input', 'logo-input', 'template-input'].includes(el.id)) {
       const files = [...el.files];
       if (el.id === 'camera-input' || el.id === 'receipt-input') {
-        for (const file of files) await addPhoto(file);
+        await handleBatchUpload(files);
       }
       if (el.id === 'logo-input' && files[0]) {
         state.contractor.logo = await compressImage(files[0], 500, 0.9);
@@ -1058,7 +1240,10 @@ window.addEventListener('hashchange', () => {
 const originalRender = render;
 render = function () {
   originalRender();
-  if (tab === 'receipts') initDragAndDrop();
+  if (tab === 'receipts') {
+    initDragAndDrop();
+    initSwipeListeners();
+  }
 };
 
 async function boot() {
@@ -1082,6 +1267,7 @@ async function boot() {
     }
     tab = ['project', 'work', 'receipts', 'invoice'].includes(location.hash.slice(1)) ? location.hash.slice(1) : 'project';
     render();
+    initSwipeListeners();
     if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js').catch(() => { });
   } catch (error) {
     fail(error);

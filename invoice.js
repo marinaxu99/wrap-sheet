@@ -5,9 +5,10 @@ export const escapeHTML = v => String(v ?? '').replace(/[&<>"']/g, c => ({
 }[c]));
 
 export const presets = [
-  { id: 'production', name: 'Production (Original Cinema Wrap)' },
+  { id: 'production', name: 'Production Modern (Clean & Bold)' },
   { id: 'minimal', name: 'Editorial Swiss (Clean Hairlines)' },
-  { id: 'field', name: 'Field Ledger (Technical Spec)' }
+  { id: 'traditional', name: 'Commercial (Formal Accounting)' },
+  { id: 'receipt-heavy', name: 'Field Ledger (Receipt-First Proof)' }
 ];
 
 const ko = {
@@ -19,6 +20,7 @@ const ko = {
   receiptsTitle: '영수증 증빙'
 };
 
+// Conservative template vocabulary.
 export function sanitizeTemplate(source) {
   const doc = new DOMParser().parseFromString(source, 'text/html');
   const allowed = new Set(['SECTION', 'DIV', 'HEADER', 'FOOTER', 'MAIN', 'ARTICLE', 'H1', 'H2', 'H3', 'H4', 'P', 'SPAN', 'STRONG', 'B', 'EM', 'I', 'BR', 'HR', 'TABLE', 'THEAD', 'TBODY', 'TR', 'TH', 'TD', 'UL', 'OL', 'LI']);
@@ -41,7 +43,7 @@ export function checkTemplate(html) {
   const unknown = [...html.matchAll(/{{\s*(\w+)\s*}}/g)].map(m => m[1]).filter(p => !placeholders.includes(p));
   if (unknown.length) throw new Error(`Unknown placeholders: ${[...new Set(unknown)].join(', ')}`);
   for (const required of ['laborTable', 'expenseTable', 'totals']) {
-    if (!html.includes(`{{${required}}}`)) throw new Error(`Template must contain {{${required}}}.`);
+    if (!html.includes(`{{${required}}}`)) throw new Error(`Template must contain {{${required}}} to keep invoice reviewable.`);
   }
   return html;
 }
@@ -58,39 +60,38 @@ export function renderInvoice(template, s, { editable = false } = {}) {
   const text = (path, value) => edit(path, value);
   const cash = value => e(money(value, c));
 
-  // Shared Line Items Table
+  // 1. Shared Table Sections
   const laborRows = s.labor.map((r, i) => `
     <tr>
       <td>${text(`labor.${i}.description`, r.description)}<br><small style="color:#666">${text(`labor.${i}.date`, r.date)}</small></td>
       <td>${edit(`labor.${i}.quantity`, r.quantity, 'number')} ${text(`labor.${i}.unit`, r.unit)}</td>
       <td>${editable ? edit(`labor.${i}.rate`, r.rate, 'number') : cash(r.rate)}</td>
-      <td><strong>${cash(round(r.quantity * r.rate, c))}</strong>${r.taxable ? ' *' : ''}</td>
+      <td style="text-align:right"><strong>${cash(round(r.quantity * r.rate, c))}</strong>${r.taxable ? ' *' : ''}</td>
     </tr>
   `).join('') || '<tr><td colspan="4" style="text-align:center; padding:12px; color:#888;">No work logged</td></tr>';
 
   const laborTable = `
-    <section>
+    <section class="invoice-section">
       <h2>${label('laborTitle')}</h2>
       <table>
-        <thead><tr><th>Description / Date</th><th>Qty / Unit</th><th>Rate</th><th>Amount</th></tr></thead>
+        <thead><tr><th>Description / Date</th><th>Qty / Unit</th><th>Rate</th><th style="text-align:right">Amount</th></tr></thead>
         <tbody>${laborRows}</tbody>
       </table>
-      <p style="font-size:10px; color:#666; margin-top:4px;">* Taxable items. Currency: ${c}</p>
+      <p style="font-size:9px; color:#777; margin-top:4px;">* Taxable items. Currency: ${c}</p>
     </section>
   `;
 
-  // Shared Reimbursable Expense Table
   const expenseRows = s.expenses.filter(r => r.verified).map((r, i) => `
     <tr>
       <td>${text(`expenses.${i}.vendor`, r.vendor)}<br><small style="color:#666">${text(`expenses.${i}.date`, r.date)}</small></td>
       ${o.showExpenseCategories ? `<td>${text(`expenses.${i}.category`, r.category)}</td>` : ''}
       ${o.showVat ? `<td>${editable ? edit(`expenses.${i}.vat`, r.vat, 'number') : cash(r.vat)}</td>` : ''}
-      <td><strong>${editable ? edit(`expenses.${i}.total`, r.total, 'number') : cash(r.total)}</strong></td>
+      <td style="text-align:right"><strong>${editable ? edit(`expenses.${i}.total`, r.total, 'number') : cash(r.total)}</strong></td>
     </tr>
   `).join('');
 
   const expenseTable = `
-    <section>
+    <section class="invoice-section">
       <h2>${label('expensesTitle')}</h2>
       <table>
         <thead>
@@ -98,28 +99,27 @@ export function renderInvoice(template, s, { editable = false } = {}) {
             <th>Vendor / Date</th>
             ${o.showExpenseCategories ? '<th>Category</th>' : ''}
             ${o.showVat ? '<th>Included VAT</th>' : ''}
-            <th>Total Paid</th>
+            <th style="text-align:right">Total Paid</th>
           </tr>
         </thead>
         <tbody>${expenseRows || `<tr><td colspan="${2 + Number(o.showVat) + Number(o.showExpenseCategories)}" style="text-align:center; padding:12px; color:#888;">No verified expenses</td></tr>`}</tbody>
       </table>
-      <p style="font-size:10px; color:#666; margin-top:4px;">Reimbursements include receipt VAT; it is not added again.</p>
+      <p style="font-size:9px; color:#777; margin-top:4px;">Reimbursements include receipt VAT; it is not added again.</p>
     </section>
   `;
 
-  // Shared Proof Grid
-  const receiptGallery = (o.showReceiptGallery !== false && s.expenses.some(r => r.verified)) ? `
-    <section class="proof-section" style="margin-top:28px;">
+  const receiptGallery = (o.showReceiptGallery !== false) ? `
+    <section class="proof-section" style="margin-top:24px; break-inside:avoid; page-break-inside:avoid;">
       <h2>${label('receiptsTitle')}</h2>
-      <div class="proof-grid">
+      <div class="proof-grid" style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
         ${s.expenses.filter(r => r.verified).map((r, i) => `
-          <figure>
-            ${r.imageThumbnail ? `<img src="${e(r.imageThumbnail)}" alt="Receipt Proof">` : '<p style="padding:40px 0; text-align:center; color:#999; font-size:11px;">Manual expense — no photo</p>'}
-            <figcaption>
+          <figure style="border:1px solid #e0e0e0; padding:8px; border-radius:4px; background:#fafafa; break-inside:avoid;">
+            ${r.imageThumbnail ? `<img src="${e(r.imageThumbnail)}" alt="Receipt Proof" style="width:100%; height:160px; object-fit:contain; background:#fff; border-radius:2px;">` : '<p style="padding:40px 0; text-align:center; color:#999; font-size:11px;">Manual expense</p>'}
+            <figcaption style="font-size:9px; color:#555; margin-top:6px; text-align:center;">
               <strong>${String(i + 1).padStart(2, '0')} / ${e(r.vendor)}</strong> · ${e(r.date)} · ${cash(r.total)}<br>${e(r.category || 'Disbursement')}
             </figcaption>
           </figure>
-        `).join('')}
+        `).join('') || '<p style="font-size:11px; color:#888;">No receipt proofs attached.</p>'}
       </div>
     </section>
   ` : '';
@@ -134,22 +134,24 @@ export function renderInvoice(template, s, { editable = false } = {}) {
   `;
 
   const paymentDetails = o.showBankInfo ? `
-    <section class="payment-block">
+    <section class="payment-block" style="margin-top:20px;">
       <h2>${label('paymentTitle')}</h2>
-      <p>Bank: <strong>${text('contractor.bankName', s.contractor.bankName)}</strong><br>
-      Account: <strong>${text('contractor.accountNumber', s.contractor.accountNumber)}</strong><br>
-      Terms: ${text('contractor.paymentTerms', s.contractor.paymentTerms)}</p>
+      <p style="font-size:11px; line-height:1.6;">
+        Bank: <strong>${text('contractor.bankName', s.contractor.bankName)}</strong><br>
+        Account: <strong>${text('contractor.accountNumber', s.contractor.accountNumber)}</strong><br>
+        Terms: ${text('contractor.paymentTerms', s.contractor.paymentTerms)}
+      </p>
     </section>
   ` : '';
 
   const notes = o.showNotes && s.project.notes ? `
-    <section class="notes-block">
-      <h2>Notes</h2>
-      <p>${text('project.notes', s.project.notes)}</p>
+    <section style="margin-top:14px;">
+      <h2 style="font-size:10px; text-transform:uppercase; letter-spacing:0.8px;">Notes</h2>
+      <p style="font-size:11px; color:#555;">${text('project.notes', s.project.notes)}</p>
     </section>
   ` : '';
 
-  // Custom User HTML Template Rendering
+  // Custom HTML Template Upload
   if (template?.html) {
     const values = {
       invoiceTitle: label('invoiceTitle'),
@@ -162,7 +164,7 @@ export function renderInvoice(template, s, { editable = false } = {}) {
       dueDate: text('project.dueDate', s.project.dueDate),
       shootDates: `${e(s.project.shootStart)} – ${e(s.project.shootEnd)}`,
       contractorDetails: `${text('contractor.address', s.contractor.address)}<br>${text('contractor.email', s.contractor.email)} · ${text('contractor.phone', s.contractor.phone)}<br>${text('contractor.taxId', s.contractor.taxId)}`,
-      logo: s.contractor.logo ? `<img class="logo" src="${e(s.contractor.logo)}" alt="Logo">` : '',
+      logo: s.contractor.logo ? `<img class="logo" src="${e(s.contractor.logo)}" alt="Logo" style="max-height:45px; margin-bottom:8px;">` : '',
       laborTable,
       expenseTable,
       receiptGallery,
@@ -180,22 +182,22 @@ export function renderInvoice(template, s, { editable = false } = {}) {
   }
 
   // ----------------------------------------------------
-  // PRESET 1: PRODUCTION (Your Original Cinema Wrap Design)
+  // PRESET 1: PRODUCTION (Default Original)
   // ----------------------------------------------------
   if (currentPresetId === 'production') {
     return `
-      <div class="invoice-theme-production">
+      <article class="invoice-paper-layout production-theme">
         <header class="invoice-header">
           <div>
-            ${s.contractor.logo ? `<img class="logo" src="${e(s.contractor.logo)}" alt="Logo">` : ''}
+            ${s.contractor.logo ? `<img src="${e(s.contractor.logo)}" alt="Logo" class="logo">` : ''}
             <h1>${label('invoiceTitle')}</h1>
-            <p><strong>${text('contractor.name', s.contractor.name || 'Contractor')}</strong><br>
-            ${text('contractor.email', s.contractor.email)} · ${text('contractor.phone', s.contractor.phone)} · ID: ${text('contractor.taxId', s.contractor.taxId || 'n/a')}</p>
+            <p style="font-size:12px; font-weight:700;">${text('contractor.name', s.contractor.name || 'Contractor')}</p>
+            <p style="font-size:10px; color:#555;">${text('contractor.email', s.contractor.email)} · ${text('contractor.phone', s.contractor.phone)} · ID: ${text('contractor.taxId', s.contractor.taxId || 'n/a')}</p>
           </div>
           <div class="inv-meta">
             <span class="inv-tag"># ${text('project.invoiceNumber', s.project.invoiceNumber)}</span>
-            <p>Issued: <strong>${text('project.invoiceDate', s.project.invoiceDate)}</strong><br>
-            Due: <strong>${text('project.dueDate', s.project.dueDate)}</strong></p>
+            <p style="margin-top:6px;">Issued: <strong>${text('project.invoiceDate', s.project.invoiceDate)}</strong></p>
+            <p>Due: <strong>${text('project.dueDate', s.project.dueDate)}</strong></p>
           </div>
         </header>
 
@@ -203,7 +205,7 @@ export function renderInvoice(template, s, { editable = false } = {}) {
           <div>
             <small>CLIENT / PRODUCTION</small>
             <strong>${text('project.clientName', s.project.clientName || 'Client')}</strong>
-            <p>${text('project.clientAddress', s.project.clientAddress)}</p>
+            <p>${text('project.clientAddress', s.project.clientAddress || '')}</p>
           </div>
           <div>
             <small>PROJECT / SHOOT</small>
@@ -223,32 +225,45 @@ export function renderInvoice(template, s, { editable = false } = {}) {
           <span>WRAPSHEET FIELD EDITION</span>
           <span>${text('contractor.footer', s.contractor.footer || 'FOOTER')}</span>
         </footer>
-      </div>
+      </article>
     `;
   }
 
   // ----------------------------------------------------
-  // PRESET 2: EDITORIAL SWISS (Minimalist Hairlines)
+  // PRESET 2: EDITORIAL SWISS (Fixed Spacing & Clean Alignment)
   // ----------------------------------------------------
   if (currentPresetId === 'minimal') {
     return `
-      <div class="invoice-theme-swiss">
-        <div class="swiss-head">
+      <article class="invoice-paper-layout minimal-theme">
+        <div style="display:flex; justify-content:space-between; align-items:flex-end; padding-bottom:16px; border-bottom:2px solid #000; margin-bottom:22px;">
           <div>
-            <h2>${text('contractor.name', s.contractor.name || 'Contractor')}</h2>
-            <p>${text('contractor.email', s.contractor.email)} / ID: ${text('contractor.taxId', s.contractor.taxId || 'n/a')}</p>
+            <h1 style="font-size:24px; font-weight:800; letter-spacing:-0.5px; margin:0 0 4px; color:#000;">${text('contractor.name', s.contractor.name || 'Contractor')}</h1>
+            <p style="font-size:11px; color:#666; margin:0;">${text('contractor.email', s.contractor.email || '')} · Tax ID: ${text('contractor.taxId', s.contractor.taxId || 'n/a')}</p>
           </div>
           <div style="text-align:right;">
-            <span>INVOICE</span>
-            <h1>#${text('project.invoiceNumber', s.project.invoiceNumber)}</h1>
+            <span style="font-size:9px; font-weight:800; letter-spacing:1.5px; color:var(--invoice-accent, #a8c3d0); display:block; text-transform:uppercase;">INVOICE</span>
+            <strong style="font-size:20px; color:#000; letter-spacing:-0.5px;">#${text('project.invoiceNumber', s.project.invoiceNumber)}</strong>
           </div>
         </div>
 
-        <div class="swiss-quad">
-          <div><small>CLIENT</small><strong>${text('project.clientName', s.project.clientName)}</strong></div>
-          <div><small>SHOOT</small><strong>${text('project.projectTitle', s.project.projectTitle)}</strong></div>
-          <div><small>ISSUED</small><strong>${text('project.invoiceDate', s.project.invoiceDate)}</strong></div>
-          <div><small>DUE</small><strong>${text('project.dueDate', s.project.dueDate)}</strong></div>
+        <!-- Clean 2-column or 4-column metadata with explicit gaps -->
+        <div style="display:grid; grid-template-columns:repeat(4, 1fr); gap:16px; margin-bottom:24px; font-size:11px;">
+          <div>
+            <span style="font-size:9px; font-weight:800; color:#888; letter-spacing:1px; display:block; margin-bottom:4px;">CLIENT</span>
+            <strong style="color:#000; font-size:12px;">${text('project.clientName', s.project.clientName || '—')}</strong>
+          </div>
+          <div>
+            <span style="font-size:9px; font-weight:800; color:#888; letter-spacing:1px; display:block; margin-bottom:4px;">SHOOT</span>
+            <strong style="color:#000; font-size:12px;">${text('project.projectTitle', s.project.projectTitle || '—')}</strong>
+          </div>
+          <div>
+            <span style="font-size:9px; font-weight:800; color:#888; letter-spacing:1px; display:block; margin-bottom:4px;">ISSUED</span>
+            <span style="color:#222;">${text('project.invoiceDate', s.project.invoiceDate || '—')}</span>
+          </div>
+          <div>
+            <span style="font-size:9px; font-weight:800; color:#888; letter-spacing:1px; display:block; margin-bottom:4px;">DUE</span>
+            <strong style="color:#000;">${text('project.dueDate', s.project.dueDate || '—')}</strong>
+          </div>
         </div>
 
         ${laborTable}
@@ -258,41 +273,90 @@ export function renderInvoice(template, s, { editable = false } = {}) {
         ${notes}
         ${receiptGallery}
 
-        <footer class="invoice-footer">
+        <footer class="invoice-footer" style="margin-top:36px; padding-top:14px; border-top:1px solid #000; font-size:9px; color:#555; letter-spacing:1px; text-transform:uppercase;">
           <span>SWISS EDITORIAL</span>
-          <span>${text('contractor.footer', s.contractor.footer || 'THANK YOU')}</span>
+          <span>${text('contractor.footer', s.contractor.footer || 'FOOTER')}</span>
         </footer>
-      </div>
+      </article>
     `;
   }
 
   // ----------------------------------------------------
-  // PRESET 3: FIELD LEDGER (Technical Grid & Callout)
+  // PRESET 3: TRADITIONAL / COMMERCIAL
+  // ----------------------------------------------------
+  if (currentPresetId === 'traditional') {
+    return `
+      <article class="invoice-paper-layout traditional-theme" style="border:1px solid #111; padding:28px; border-radius:0;">
+        <div style="text-align:center; border-bottom:2px solid #111; padding-bottom:14px; margin-bottom:20px;">
+          <h1 style="font-size:22px; font-weight:800; letter-spacing:2px; margin-bottom:4px;">${label('invoiceTitle')}</h1>
+          <p style="font-size:12px; color:#444;">${text('contractor.name', s.contractor.name)} · ${text('contractor.address', s.contractor.address)}</p>
+        </div>
+
+        <div style="display:grid; grid-template-columns:1fr 1fr; border:1px solid #ddd; padding:12px 16px; margin-bottom:20px; font-size:11px; gap:20px;">
+          <div style="border-right:1px solid #eee; padding-right:12px;">
+            <p style="margin-bottom:4px;"><strong style="margin-right:6px;">To:</strong> ${text('project.clientName', s.project.clientName)}</p>
+            <p style="margin-bottom:4px;"><strong style="margin-right:6px;">Address:</strong> ${text('project.clientAddress', s.project.clientAddress)}</p>
+            <p><strong style="margin-right:6px;">Shoot:</strong> ${text('project.projectTitle', s.project.projectTitle)}</p>
+          </div>
+          <div>
+            <p style="margin-bottom:4px;"><strong style="margin-right:6px;">Invoice #:</strong> ${text('project.invoiceNumber', s.project.invoiceNumber)}</p>
+            <p style="margin-bottom:4px;"><strong style="margin-right:6px;">Issue Date:</strong> ${text('project.invoiceDate', s.project.invoiceDate)}</p>
+            <p><strong style="margin-right:6px;">Due Date:</strong> ${text('project.dueDate', s.project.dueDate)}</p>
+          </div>
+        </div>
+
+        ${laborTable}
+        ${expenseTable}
+        ${totalBlock}
+        ${paymentDetails}
+        ${notes}
+        ${receiptGallery}
+
+        <div style="text-align:center; margin-top:28px; border-top:1px dotted #999; padding-top:10px; font-size:9px; color:#666; letter-spacing:1px; text-transform:uppercase;">
+          ${text('contractor.footer', s.contractor.footer || 'OFFICIAL COMMERCIAL INVOICE')}
+        </div>
+      </article>
+    `;
+  }
+
+  // ----------------------------------------------------
+  // PRESET 4: FIELD LEDGER
   // ----------------------------------------------------
   return `
-    <div class="invoice-theme-field">
-      <div class="field-banner">
-        <span>WRAPSHEET // FIELD DISBURSEMENT</span>
-        <span>AUDIT REF: #${text('project.invoiceNumber', s.project.invoiceNumber)}</span>
+    <article class="invoice-paper-layout receipt-heavy-theme">
+      <div style="background:#111; color:#fff; padding:6px 12px; font-family:var(--font-accent, monospace); font-size:11px; font-weight:700; display:flex; justify-content:space-between; margin-bottom:18px;">
+        <span>FIELD DISBURSEMENT & WRAP SHEET</span>
+        <span>REF: ${text('project.invoiceNumber', s.project.invoiceNumber)}</span>
       </div>
 
-      <div class="field-trio">
-        <div><small>CONTRACTOR</small><strong>${text('contractor.name', s.contractor.name)}</strong><p>${text('contractor.email', s.contractor.email)}</p></div>
-        <div><small>PRODUCTION</small><strong>${text('project.clientName', s.project.clientName)}</strong><p>${text('project.projectTitle', s.project.projectTitle)}</p></div>
-        <div><small>PAYMENT DUE</small><strong>${text('project.dueDate', s.project.dueDate)}</strong><p>${text('contractor.bankName', s.contractor.bankName)}</p></div>
+      <div style="display:grid; grid-template-columns:repeat(3, 1fr); gap:12px; margin-bottom:20px; font-size:11px;">
+        <div style="border:1px solid #333; padding:10px;">
+          <span style="color:#777; font-size:8px; font-weight:800; display:block; margin-bottom:4px; letter-spacing:0.5px;">CLAIMANT</span>
+          <strong style="display:block; margin-bottom:2px;">${text('contractor.name', s.contractor.name)}</strong>
+          <span style="font-size:10px; color:#555;">ID: ${text('contractor.taxId', s.contractor.taxId || 'n/a')}</span>
+        </div>
+        <div style="border:1px solid #333; padding:10px;">
+          <span style="color:#777; font-size:8px; font-weight:800; display:block; margin-bottom:4px; letter-spacing:0.5px;">PRODUCTION</span>
+          <strong style="display:block; margin-bottom:2px;">${text('project.clientName', s.project.clientName)}</strong>
+          <span style="font-size:10px; color:#555;">${text('project.projectTitle', s.project.projectTitle)}</span>
+        </div>
+        <div style="border:1px solid #333; padding:10px;">
+          <span style="color:#777; font-size:8px; font-weight:800; display:block; margin-bottom:4px; letter-spacing:0.5px;">REMITTANCE</span>
+          <strong style="display:block; margin-bottom:2px;">Due: ${text('project.dueDate', s.project.dueDate)}</strong>
+          <span style="font-size:10px; color:#555;">${text('contractor.bankName', s.contractor.bankName)}</span>
+        </div>
       </div>
 
       ${laborTable}
       ${expenseTable}
       ${totalBlock}
-      ${paymentDetails}
-      ${notes}
       ${receiptGallery}
+      ${paymentDetails}
 
-      <footer class="invoice-footer">
-        <span>FIELD LOG SPECIFICATION</span>
-        <span>${text('contractor.footer', s.contractor.footer || 'AUDIT READY')}</span>
+      <footer class="invoice-footer" style="margin-top:32px; padding-top:12px; border-top:1px solid #333; display:flex; justify-content:space-between; font-size:9px; color:#888;">
+        <span>WRAPSHEET FIELD SPECIFICATION</span>
+        <span>${text('contractor.footer', s.contractor.footer || 'VERIFIED ORIGINALS')}</span>
       </footer>
-    </div>
+    </article>
   `;
 }
