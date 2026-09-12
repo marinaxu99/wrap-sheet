@@ -40,21 +40,45 @@ function calculateDueDate(invoiceDate, termsPreset) {
   return null;
 }
 
+/* Floating Game-HUD Toast Controller */
 function message(text, persistent = false) {
-  const el = $('#message');
-  if (!el) return;
+  const toast = $('#hud-toast');
+  const textEl = $('#hud-toast-text');
+  if (!toast || !textEl) return;
+
   clearTimeout(messageTimer);
-  el.textContent = text;
-  el.hidden = !text;
-  if (text && !persistent) {
+
+  if (!text) {
+    toast.classList.remove('is-visible', 'is-error');
+    return;
+  }
+
+  textEl.textContent = text;
+  toast.classList.remove('is-error');
+  toast.classList.add('is-visible');
+
+  if (!persistent) {
     messageTimer = setTimeout(() => {
-      el.hidden = true;
-      el.textContent = '';
-    }, 4000);
+      toast.classList.remove('is-visible');
+    }, 2400);
   }
 }
 
-function fail(error) { message(error.message || String(error), true); }
+function fail(error) {
+  const toast = $('#hud-toast');
+  const textEl = $('#hud-toast-text');
+  if (!toast || !textEl) return;
+
+  clearTimeout(messageTimer);
+  const text = error.message || String(error);
+
+  textEl.textContent = text;
+  toast.classList.add('is-visible', 'is-error');
+
+  messageTimer = setTimeout(() => {
+    toast.classList.remove('is-visible', 'is-error');
+  }, 3500);
+}
 
 function setting(key) {
   try { return localStorage.getItem(`wrapsheet.${key}`) || ''; } catch { return ''; }
@@ -104,7 +128,7 @@ function save() {
     })
     .catch(error => {
       setSaveStatus('Not saved', '#f07c74');
-      message(`Could not save shoot: ${error.message}.`, true);
+      fail(new Error(`Could not save shoot: ${error.message}`));
       throw error;
     });
 
@@ -125,9 +149,9 @@ function updateStickyActionBar() {
   const btn = $('#primary-action-btn');
   if (!btn) return;
   const isMobile = window.innerWidth <= 760;
-  if (tab === 'project') btn.textContent = isMobile ? 'Next →' : 'Next: Add Work →';
-  else if (tab === 'work') btn.textContent = isMobile ? 'Next →' : 'Next: Add Receipts →';
-  else if (tab === 'receipts') btn.textContent = isMobile ? 'Review →' : 'Review Invoice →';
+  if (tab === 'project') btn.textContent = isMobile ? 'Next' : 'Next: Add Work';
+  else if (tab === 'work') btn.textContent = isMobile ? 'Next' : 'Next: Add Receipts';
+  else if (tab === 'receipts') btn.textContent = isMobile ? 'Review' : 'Review Invoice';
   else if (tab === 'invoice') btn.textContent = 'Export PDF';
 }
 
@@ -150,9 +174,7 @@ function summary() {
     } else if (pending > 0) {
       statusPill.hidden = false;
       statusPill.className = 'status-indicator-pill pending';
-      statusPill.innerHTML = window.innerWidth <= 760
-        ? `<span class="pill-dot">○</span> ${pending} to review <span class="pill-arrow">→</span>`
-        : `<span class="pill-dot">○</span> ${pending} receipt${pending === 1 ? '' : 's'} awaiting review <span class="pill-arrow">→</span>`;
+      statusPill.innerHTML = `<span><span class="pill-dot">●</span>${pending} unverified receipt${pending === 1 ? '' : 's'}</span><span style="font-size:10px; opacity:0.8; text-transform:uppercase; letter-spacing:0.5px;">Check →</span>`;
       statusPill.onclick = () => {
         go('receipts');
         setTimeout(() => {
@@ -163,9 +185,7 @@ function summary() {
     } else {
       statusPill.hidden = false;
       statusPill.className = 'status-indicator-pill verified';
-      statusPill.innerHTML = window.innerWidth <= 760
-        ? `<span class="pill-dot">✓</span> All verified`
-        : `<span class="pill-dot">✓</span> All ${state.expenses.length} receipts verified · Audit ready`;
+      statusPill.innerHTML = `<span>✓ All receipts verified</span>`;
       statusPill.onclick = null;
     }
   }
@@ -279,7 +299,7 @@ function workView() {
       ${field('Tax on taxable work (%)', 'project.taxRate', 'number', 'min="0" max="100" step="0.1" placeholder="e.g. 3.3 or 10"')}
     </div>
     <div class="actions" style="margin-top: 24px;">
-      <button class="primary" data-go="receipts">Continue to receipts →</button>
+      <button class="primary" data-go="receipts">Continue to Receipts</button>
     </div>`, 'WORK\nLOG');
 }
 
@@ -361,7 +381,7 @@ function receiptView() {
         </div>
       </div>`).join('')}
     <div class="actions" style="margin-top: 24px;">
-      <button class="primary" data-go="invoice">Review invoice →</button>
+      <button class="primary" data-go="invoice">Review Invoice</button>
     </div>`, 'RECEIPTS\nPROOF');
 }
 
@@ -912,18 +932,15 @@ Total Due: ${money(t.total, c)}`;
     if (!confirmed) return;
 
     try {
-      // 1. Delete associated receipts from IndexedDB
       for (const r of state.expenses) {
         if (r.receiptId) {
           await db.del('receipts', r.receiptId).catch(() => { });
         }
       }
-      // 2. Delete project from IndexedDB
       await db.del('projects', state.id).catch(() => { });
 
       projects = projects.filter(p => p.id !== state.id);
 
-      // 3. Switch to another project or create a clean one
       if (projects.length > 0) {
         await loadProject(projects[0].id);
         message(`"${title}" deleted. Switched to ${projects[0].project.projectTitle || 'production'}.`);

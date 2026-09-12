@@ -69,7 +69,11 @@
             <button data-tab="invoice"><span>04</span> Invoice</button>
         </nav>
 
-        <div id="message" role="alert" hidden></div>
+        <!-- Floating HUD Notification Toast -->
+        <div id="hud-toast" class="hud-toast" role="status" aria-live="polite">
+            <span class="hud-dot"></span>
+            <span id="hud-toast-text" class="hud-text"></span>
+        </div>
 
         <div class="workspace">
             <section id="view" aria-live="polite"></section>
@@ -89,7 +93,7 @@
                 </div>
                 <div id="receipt-status-pill" class="status-indicator-pill" title="Tap to view pending receipts" hidden>
                 </div>
-                <button id="primary-action-btn" class="primary wide">Next: Add Work →</button>
+                <button id="primary-action-btn" class="primary wide">Next: Add Work</button>
             </aside>
         </div>
 
