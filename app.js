@@ -161,8 +161,13 @@ function summary() {
 
   if ($('#summary-name')) $('#summary-name').textContent = state.project.projectTitle || 'Untitled production';
   if ($('#labor-total')) $('#labor-total').textContent = money(t.labor, c);
-  if ($('#tax-total')) $('#tax-total').textContent = money(t.tax, c);
-  if ($('#tax-percent')) $('#tax-percent').textContent = `(${state.project.taxRate}%)`;
+
+  // Format tax display with explicit +/- sign
+  const taxSign = t.isWithholding ? '−' : '+';
+  const taxLabelText = t.isWithholding ? 'Withholding tax' : 'Labor tax (VAT)';
+  if ($('#tax-label')) $('#tax-label').innerHTML = `${taxLabelText} <small id="tax-percent">(${state.project.taxRate}%)</small>`;
+  if ($('#tax-total')) $('#tax-total').textContent = t.tax > 0 ? `${taxSign}${money(t.tax, c)}` : money(0, c);
+
   if ($('#expense-total')) $('#expense-total').textContent = money(t.expenses, c);
   if ($('#grand-total')) $('#grand-total').textContent = money(t.total, c);
 
@@ -176,8 +181,6 @@ function summary() {
       statusPill.style.display = '';
       statusPill.hidden = false;
       statusPill.className = 'status-indicator-pill pending';
-      // App version (<= 760px): concise single-line tag
-      // Desktop version: full metadata banner
       statusPill.innerHTML = window.innerWidth <= 760
         ? `<span><span class="pill-dot">●</span> ${pending} receipt${pending === 1 ? '' : 's'} →</span>`
         : `<span><span class="pill-dot">●</span> ${pending} unverified receipt${pending === 1 ? '' : 's'}</span><span style="font-size:10px; opacity:0.8; text-transform:uppercase; letter-spacing:0.5px;">Check →</span>`;
@@ -279,6 +282,7 @@ const laborTypes = ['Shoot Day', 'Prep Day', 'Travel Day', 'Half Day', 'Overtime
 
 function workView() {
   const rateStep = state.project.currency === 'KRW' ? '1000' : 'any';
+  const taxMode = state.project.taxType || 'vat';
 
   return panel('Every hour. Every piece of kit.', 'Build your agreed day rates and equipment fees.',
     `<div class="inline-action-row">
@@ -305,8 +309,14 @@ function workView() {
           <span>Taxable item</span>
         </label>
       </div>`).join('') : '<div class="empty" style="padding:20px 0; color:var(--muted);">No work logged yet. Add your first shoot day above.</div>'}
-    <div class="form-grid" style="margin-top:20px;">
-      ${field('Tax on taxable work (%)', 'project.taxRate', 'number', 'min="0" max="100" step="0.1" placeholder="e.g. 3.3 or 10"')}
+    
+    <!-- Tax Configuration Section with Model Switch -->
+    <div class="form-grid" style="margin-top:24px; padding-top:18px; border-top:1px solid var(--line);">
+      ${select('Tax Calculation Mode', 'project.taxType', [
+      ['vat', 'VAT / Sales Tax (+ Added to Total)'],
+      ['withholding', 'Withholding Tax / 원천징수 (− Deducted from Payout)']
+    ])}
+      ${field(taxMode === 'withholding' ? 'Withholding Rate (%) — e.g. 3.3' : 'VAT Rate (%) — e.g. 10', 'project.taxRate', 'number', 'min="0" max="100" step="0.1" placeholder="e.g. 3.3 or 10"')}
     </div>`, 'WORK\nLOG');
 }
 
@@ -915,10 +925,14 @@ const actions = {
   },
   'copy-summary': async () => {
     const t = totals(state), c = state.project.currency;
+    const taxLabel = t.isWithholding ? 'Withholding Tax' : 'Labor Tax (VAT)';
+    const taxSign = t.isWithholding ? '−' : '+';
+
     const summaryText = `[WrapSheet] ${state.project.projectTitle || 'Production'}
 Client: ${state.project.clientName || '-'}
 Invoice: ${state.project.invoiceNumber || state.project.defaultInvoiceNumber || '-'}
 Work & Equipment: ${money(t.labor, c)}
+${taxLabel} (${state.project.taxRate}%): ${taxSign}${money(t.tax, c)}
 Verified Expenses: ${money(t.expenses, c)}
 Total Due: ${money(t.total, c)}`;
     await navigator.clipboard.writeText(summaryText);
@@ -1174,6 +1188,11 @@ document.addEventListener('change', async event => {
           const dueInput = $('#payment-due-input');
           if (dueInput) dueInput.value = computed;
         }
+      }
+
+      // Re-render work view when tax type toggles to update placeholder and hints
+      if (el.dataset.field === 'project.taxType') {
+        render();
       }
 
       if (tab === 'invoice') preview();

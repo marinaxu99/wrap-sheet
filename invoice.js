@@ -20,7 +20,6 @@ const ko = {
   receiptsTitle: '영수증 증빙'
 };
 
-// Conservative template vocabulary.
 export function sanitizeTemplate(source) {
   const doc = new DOMParser().parseFromString(source, 'text/html');
   const allowed = new Set(['SECTION', 'DIV', 'HEADER', 'FOOTER', 'MAIN', 'ARTICLE', 'H1', 'H2', 'H3', 'H4', 'P', 'SPAN', 'STRONG', 'B', 'EM', 'I', 'BR', 'HR', 'TABLE', 'THEAD', 'TBODY', 'TR', 'TH', 'TD', 'UL', 'OL', 'LI']);
@@ -60,7 +59,6 @@ export function renderInvoice(template, s, { editable = false } = {}) {
   const text = (path, value) => edit(path, value);
   const cash = value => e(money(value, c));
 
-  // 1. Shared Table Sections
   const laborRows = s.labor.map((r, i) => `
     <tr>
       <td>${text(`labor.${i}.description`, r.description)}<br><small style="color:#666">${text(`labor.${i}.date`, r.date)}</small></td>
@@ -124,10 +122,13 @@ export function renderInvoice(template, s, { editable = false } = {}) {
     </section>
   ` : '';
 
+  // Adaptive tax calculation label and sign
+  const taxTitle = t.isWithholding ? 'Withholding tax' : 'Labor tax (VAT)';
+  const taxPrefix = t.isWithholding ? '−' : '+';
   const totalBlock = `
     <div class="invoice-totals">
       <div><span>Work subtotal</span><strong>${cash(t.labor)}</strong></div>
-      ${t.tax > 0 ? `<div><span>Labor tax (${e(s.project.taxRate)}%)</span><strong>${cash(t.tax)}</strong></div>` : ''}
+      ${t.tax > 0 ? `<div><span>${taxTitle} (${e(s.project.taxRate)}%)</span><strong>${taxPrefix}${cash(t.tax)}</strong></div>` : ''}
       ${t.expenses > 0 ? `<div><span>Expenses</span><strong>${cash(t.expenses)}</strong></div>` : ''}
       <div class="amount-due"><span>${label('totalTitle')}</span><strong>${cash(t.total)}</strong></div>
     </div>
@@ -151,7 +152,6 @@ export function renderInvoice(template, s, { editable = false } = {}) {
     </section>
   ` : '';
 
-  // Custom HTML Template Upload
   if (template?.html) {
     const values = {
       invoiceTitle: label('invoiceTitle'),
@@ -170,7 +170,7 @@ export function renderInvoice(template, s, { editable = false } = {}) {
       receiptGallery,
       laborTotal: cash(t.labor),
       expenseTotal: cash(t.expenses),
-      taxTotal: cash(t.tax),
+      taxTotal: `${taxPrefix}${cash(t.tax)}`,
       totalAmountDue: cash(t.total),
       totals: totalBlock,
       paymentDetails,
@@ -181,9 +181,7 @@ export function renderInvoice(template, s, { editable = false } = {}) {
     return safe.replace(/{{\s*(\w+)\s*}}/g, (_, key) => values[key] ?? '');
   }
 
-  // ----------------------------------------------------
-  // PRESET 1: PRODUCTION (Default Original)
-  // ----------------------------------------------------
+  // PRESET 1: PRODUCTION
   if (currentPresetId === 'production') {
     return `
       <article class="invoice-paper-layout production-theme">
@@ -229,9 +227,7 @@ export function renderInvoice(template, s, { editable = false } = {}) {
     `;
   }
 
-  // ----------------------------------------------------
-  // PRESET 2: EDITORIAL SWISS (Fixed Spacing & Clean Alignment)
-  // ----------------------------------------------------
+  // PRESET 2: EDITORIAL SWISS
   if (currentPresetId === 'minimal') {
     return `
       <article class="invoice-paper-layout minimal-theme">
@@ -246,7 +242,6 @@ export function renderInvoice(template, s, { editable = false } = {}) {
           </div>
         </div>
 
-        <!-- Clean 2-column or 4-column metadata with explicit gaps -->
         <div style="display:grid; grid-template-columns:repeat(4, 1fr); gap:16px; margin-bottom:24px; font-size:11px;">
           <div>
             <span style="font-size:9px; font-weight:800; color:#888; letter-spacing:1px; display:block; margin-bottom:4px;">CLIENT</span>
@@ -281,9 +276,7 @@ export function renderInvoice(template, s, { editable = false } = {}) {
     `;
   }
 
-  // ----------------------------------------------------
-  // PRESET 3: TRADITIONAL / COMMERCIAL
-  // ----------------------------------------------------
+  // PRESET 3: COMMERCIAL
   if (currentPresetId === 'traditional') {
     return `
       <article class="invoice-paper-layout traditional-theme" style="border:1px solid #111; padding:28px; border-radius:0;">
@@ -319,9 +312,7 @@ export function renderInvoice(template, s, { editable = false } = {}) {
     `;
   }
 
-  // ----------------------------------------------------
   // PRESET 4: FIELD LEDGER
-  // ----------------------------------------------------
   return `
     <article class="invoice-paper-layout receipt-heavy-theme">
       <div style="background:#111; color:#fff; padding:6px 12px; font-family:var(--font-accent, monospace); font-size:11px; font-weight:700; display:flex; justify-content:space-between; margin-bottom:18px;">

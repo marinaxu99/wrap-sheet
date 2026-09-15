@@ -30,10 +30,11 @@ export function newProject() {
             invoiceDate: baseToday,
             termsPreset: 'due_receipt',
             dueDate: baseToday,
-            defaultInvoiceNumber: autoId, // Usable auto-generated fallback
-            invoiceNumber: '',           // Empty string so it acts as placeholder in form
+            defaultInvoiceNumber: autoId,
+            invoiceNumber: '',
             currency: 'KRW',
             notes: 'Thank you for making it happen.',
+            taxType: 'vat', // 'vat' (+ added) or 'withholding' (- deducted)
             taxRate: 0
         },
         contractor: {
@@ -85,7 +86,11 @@ export function totals(s) {
     const taxable = round(s.labor.filter(r => r.taxable).reduce((n, r) => n + line(r), 0), c);
     const expenses = round(s.expenses.filter(r => r.verified).reduce((n, r) => n + (Number(r.total) || 0), 0), c);
     const tax = round(taxable * s.project.taxRate / 100, c);
-    return { labor, taxable, expenses, tax, total: round(labor + expenses + tax, c) };
+
+    const isWithholding = s.project.taxType === 'withholding';
+    const total = round(isWithholding ? (labor - tax + expenses) : (labor + expenses + tax), c);
+
+    return { labor, taxable, expenses, tax, total, isWithholding };
 }
 
 export function validNumber(value, max = 1e12) {
