@@ -104,7 +104,7 @@ textarea {
   appearance: none;
 }
 
-/* Placeholders Clearly Differentiated as Ghost Text */
+/* Clear Distinction for Placeholders */
 input::placeholder,
 textarea::placeholder {
   color: var(--muted) !important;
@@ -196,7 +196,18 @@ label textarea {
   letter-spacing: normal;
 }
 
-/* Game-HUD Toast Container */
+/* Guide hint on fresh shoot load */
+.guide-hint {
+  color: var(--accent) !important;
+  font-weight: 600;
+  margin-top: 6px;
+  font-size: 11px;
+}
+
+/* ==========================================================================
+   GAME-HUD TOAST (RESPONSIVE WRAPPING & NO TRUNCATION)
+   ========================================================================== */
+
 .hud-toast {
   position: fixed;
   top: max(20px, env(safe-area-inset-top));
@@ -209,14 +220,14 @@ label textarea {
   display: inline-flex;
   align-items: center;
   gap: 10px;
-  max-width: min(92vw, 440px);
+  max-width: min(92vw, 480px);
   padding: 10px 18px;
-  background: rgba(18, 21, 24, 0.88);
+  background: rgba(18, 21, 24, 0.92);
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
   border: 1px solid rgba(168, 195, 208, 0.28);
   border-radius: 30px;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.55), 0 0 12px rgba(168, 195, 208, 0.15);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6), 0 0 12px rgba(168, 195, 208, 0.15);
   transition: transform 0.22s cubic-bezier(0.16, 1, 0.3, 1),
     opacity 0.22s ease,
     visibility 0.22s ease;
@@ -229,8 +240,8 @@ label textarea {
 }
 
 .hud-toast.is-error {
-  border-color: rgba(229, 135, 131, 0.4);
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.55), 0 0 14px rgba(229, 135, 131, 0.2);
+  border-color: rgba(229, 135, 131, 0.45);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6), 0 0 14px rgba(229, 135, 131, 0.2);
 }
 
 .hud-dot {
@@ -253,9 +264,9 @@ label textarea {
   font-weight: 600;
   color: var(--text);
   letter-spacing: 0.01em;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  white-space: normal;
+  /* Permits 2-line wraps cleanly on mobile */
+  line-height: 1.35;
 }
 
 dialog {
@@ -471,7 +482,6 @@ h1 span {
   flex-shrink: 0;
 }
 
-/* Shoots Dropdown with Restored Clean Arrow */
 .switch-btn-wrap {
   position: relative;
   width: 96px;
@@ -610,7 +620,6 @@ h1 span {
   background: transparent !important;
 }
 
-/* Equalized Baseline Alignment for Inline Actions */
 .inline-action-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 130px;
@@ -1019,7 +1028,7 @@ h1 span {
 }
 
 /* ==========================================================================
-   STATUS INDICATOR PILL (INTERACTIVE BANNER / COMPACT DOCK)
+   STATUS INDICATOR PILL (REVIEWS ONLY — HIDDEN WHEN EMPTY)
    ========================================================================== */
 
 .status-indicator-pill {
@@ -1041,6 +1050,11 @@ h1 span {
   background: rgba(227, 184, 121, 0.08);
   color: #e3b879;
   transition: all 0.15s ease;
+}
+
+/* Zero Ghost Boxes: Explicitly hide when hidden attribute is present */
+.status-indicator-pill[hidden] {
+  display: none !important;
 }
 
 .status-indicator-pill:hover {
@@ -1101,7 +1115,7 @@ footer {
 }
 
 /* ==========================================================================
-   SECTION 4: INVOICE DECK & FULL-ROW ACTIONS
+   SECTION 4: INVOICE DECK & BALANCED 2x2 ACTION GRID
    ========================================================================== */
 
 .swatch-group {
@@ -1128,7 +1142,6 @@ footer {
   box-shadow: 0 0 10px rgba(255, 255, 255, 0.4);
 }
 
-/* Full Row Twin Buttons */
 .deck-row {
   display: flex;
   gap: 10px;
@@ -1159,27 +1172,27 @@ footer {
   box-sizing: border-box;
 }
 
+/* Equalized 2x2 Button Grid */
 .invoice-action-bar {
-  display: flex;
-  gap: 12px;
-  margin-top: 24px;
-  flex-wrap: wrap;
+  display: grid !important;
+  grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  gap: 10px !important;
+  margin-top: 24px !important;
+  width: 100% !important;
 }
 
 .invoice-action-bar button {
-  flex: 1;
-  min-width: 130px;
-  height: 44px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  font-size: 13px;
-  font-weight: 600;
-}
-
-.invoice-action-bar .primary {
-  flex: 1.2;
+  width: 100% !important;
+  height: 44px !important;
+  min-height: 44px !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: 8px !important;
+  font-size: 13px !important;
+  font-weight: 600 !important;
+  border-radius: 8px !important;
+  box-sizing: border-box !important;
 }
 
 .preview-prompt-bar {
@@ -1258,17 +1271,18 @@ footer {
   background: transparent !important;
 }
 
+/* Modal Edit Mode: Clear Interactive Dashed Indicators */
 #invoice-modal-content [contenteditable="true"],
 #invoice-modal-content [data-edit] {
-  outline: 1px dashed rgba(168, 195, 208, 0.75) !important;
-  outline-offset: 2px;
+  outline: 1.5px dashed rgba(40, 110, 150, 0.75) !important;
+  outline-offset: 3px;
   border-radius: 2px;
   cursor: text;
-  background: rgba(168, 195, 208, 0.12);
-  padding: 1px 4px;
+  background: rgba(168, 195, 208, 0.18);
+  padding: 2px 6px;
 }
 
-/* Invoice Header */
+/* Invoice Structure */
 .invoice-paper .invoice-header {
   display: flex;
   justify-content: space-between;
@@ -1480,6 +1494,7 @@ footer {
   text-transform: uppercase;
 }
 
+/* Natural 100% Zoom Edit Modal Container */
 dialog#invoice-zoom-modal {
   width: 100vw;
   max-width: 100vw;
@@ -1532,12 +1547,20 @@ dialog#invoice-zoom-modal[open] {
   overflow-y: auto;
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
-  padding: 16px 12px calc(50px + env(safe-area-inset-bottom));
+  padding: 24px 16px calc(60px + env(safe-area-inset-bottom));
   display: flex;
   justify-content: center;
   align-items: flex-start;
-  background: rgba(13, 15, 16, 0.95);
+  background: rgba(13, 15, 16, 0.98);
   box-sizing: border-box;
+}
+
+/* Invoice in edit modal stays at full native readable resolution (no minified squishing) */
+.zoom-modal-body>.invoice-paper {
+  width: 680px;
+  min-width: 680px;
+  transform: none !important;
+  margin: 0 auto;
 }
 
 dialog#receipt-inspect-modal {
@@ -1881,38 +1904,9 @@ dialog#receipt-inspect-modal[open] {
   }
 
   .zoom-modal-body {
-    padding: 12px 8px calc(60px + env(safe-area-inset-bottom));
+    padding: 12px 10px calc(60px + env(safe-area-inset-bottom));
     display: block;
-    overflow-x: hidden;
-  }
-
-  .zoom-modal-body>.invoice-paper {
-    transform-origin: top left;
-    width: 680px;
-    min-width: 680px;
-  }
-
-  dialog#receipt-inspect-modal {
-    width: 100vw;
-    max-width: 100vw;
-    height: 100dvh;
-    max-height: 100dvh;
-    border-radius: 0;
-  }
-
-  .inspect-body {
-    grid-template-columns: 1fr;
-    grid-template-rows: 240px 1fr;
-  }
-
-  .inspect-img-pane {
-    border-right: 0;
-    border-bottom: 1px solid var(--line);
-    padding: 10px;
-  }
-
-  .inspect-form-pane {
-    padding: 16px;
+    overflow-x: auto;
   }
 
   footer {

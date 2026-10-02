@@ -1,142 +1,135 @@
-import { validNumber, validDate } from './model.js';
-
-export async function compressImage(file, max = 1200, quality = 0.82) {
-  if (!/^image\/(jpeg|png|webp|gif|heic|heif|avif)$/.test(file.type)) {
-    throw new Error('Choose an image file (JPEG, PNG, WebP).');
-  }
-  if (file.size > 25 * 1024 * 1024) {
-    throw new Error('Image exceeds 25 MB.');
-  }
-
-  const url = URL.createObjectURL(file);
-  const img = new Image();
-
-  try {
-    img.src = url;
-    await img.decode();
-
-    const scale = Math.min(1, max / Math.max(img.naturalWidth, img.naturalHeight));
-    const canvas = document.createElement('canvas');
-    canvas.width = Math.max(1, Math.round(img.naturalWidth * scale));
-    canvas.height = Math.max(1, Math.round(img.naturalHeight * scale));
-
-    const ctx = canvas.getContext('2d');
-    ctx.fillStyle = '#ffffff';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-
-    return canvas.toDataURL('image/jpeg', quality);
-  } catch (e) {
-    throw new Error(`Cannot process image: ${e.message}`);
-  } finally {
-    URL.revokeObjectURL(url);
-  }
-}
-
-function normalizeDate(raw) {
-  if (!raw) return '';
-  const clean = raw.trim().replace(/[./\s]/g, '-').replace(/[年月]/g, '-').replace(/[일]/g, '');
-  const match = clean.match(/(\d{2,4})-(\d{1,2})-(\d{1,2})/);
-  if (!match) return '';
-  let [_, y, m, d] = match;
-  if (y.length === 2) y = `20${y}`;
-  const iso = `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
-  return validDate(iso) ? iso : '';
-}
-
-export async function parseReceiptImage(image, key, currency, fetcher = fetch) {
-  if (!key) {
-    throw new Error('Add your Gemini API key in Settings.');
-  }
-
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 30000);
-
-  const prompt = `You are a film production accounting assistant. 
-Analyze this receipt image. It may contain a single receipt, OR multiple transaction slips (such as a Korean Hi-Pass highway toll statement 확인증 with multiple boxed entries).
-- If it has MULTIPLE slips/boxes (like toll transactions), extract EACH box as a separate item in the items array.
-- For each item:
-  - vendor: Merchant or Toll station name (e.g., "한국도로공사", "민자운영사 - 문산").
-  - date: Transaction date formatted as YYYY-MM-DD.
-  - total: Final amount paid (이용금액).
-  - vat: VAT amount (부가세) if listed, otherwise 0.
-  - category: Exactly one of: "Meals/Catering", "Coffee/Craft", "Transport/Gas/Parking", "Gear/Expendables", "Courier/Post", "Lodging", or "Other". (For tolls use "Transport/Gas/Parking").
-  - currency: 3-letter currency code (default "${currency || 'KRW'}").`;
-
-  try {
-    const response = await fetcher('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent', {
-      method: 'POST',
-      signal: controller.signal,
-      headers: {
-        'Content-Type': 'application/json',
-        'x-goog-api-key': key
-      },
-      body: JSON.stringify({
-        contents: [{
-          parts: [
-            { text: prompt },
-            { inlineData: { mimeType: 'image/jpeg', data: image.split(',')[1] } }
-          ]
-        }],
-        generationConfig: {
-          responseMimeType: 'application/json',
-          responseSchema: {
-            type: 'OBJECT',
-            properties: {
-              items: {
-                type: 'ARRAY',
-                items: {
-                  type: 'OBJECT',
-                  properties: {
-                    vendor: { type: 'STRING' },
-                    date: { type: 'STRING' },
-                    total: { type: 'NUMBER', nullable: true },
-                    vat: { type: 'NUMBER', nullable: true },
-                    category: { type: 'STRING' },
-                    currency: { type: 'STRING' }
-                  },
-                  required: ['vendor', 'date', 'total', 'vat', 'category', 'currency']
-                }
-              }
-            },
-            required: ['items']
+// Compress and downscale receipt images to avoid payload errors
+export async function compressImage(file, maxDimension = 1200, quality = 0.8) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = ev => {
+      const img = new Image();
+      img.onload = () => {
+        let { width, height } = img;
+        if (width > maxDimension || height > maxDimension) {
+          if (width > height) {
+            height = Math.round((height * maxDimension) / width);
+            width = maxDimension;
+          } else {
+            width = Math.round((width * maxDimension) / height);
+            height = maxDimension;
           }
         }
-      })
-    });
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, width, height);
+        resolve(canvas.toDataURL('image/jpeg', quality));
+      };
+      img.onerror = reject;
+      img.src = ev.target.result;
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
 
-    if (!response.ok) {
-      throw new Error(`OCR scan failed (${response.status}).`);
-    }
-
-    const data = await response.json();
-    const text = data.candidates?.[0]?.content?.parts?.find(p => p.text)?.text;
-    if (!text) throw new Error('No receipt data recognized.');
-
-    const parsed = JSON.parse(text);
-    const results = (parsed.items || []).map(item => ({
-      vendor: (item.vendor || '').slice(0, 200),
-      date: normalizeDate(item.date),
-      total: typeof item.total === 'number' && validNumber(item.total) ? item.total : '',
-      vat: typeof item.vat === 'number' && validNumber(item.vat) ? item.vat : 0,
-      category: item.category || 'Transport/Gas/Parking',
-      currency: (item.currency || currency || 'KRW').toUpperCase(),
-      warning: !normalizeDate(item.date) ? 'Verify date' : ''
-    }));
-
-    return results.length > 0 ? results : [{
-      vendor: '',
-      date: '',
-      total: '',
-      vat: 0,
-      category: 'Other',
-      currency: currency || 'KRW',
-      warning: 'Could not extract items cleanly'
-    }];
-  } catch (err) {
-    if (err.name === 'AbortError') throw new Error('OCR scan timed out.');
-    throw err;
-  } finally {
-    clearTimeout(timer);
+// Parse receipt image with Gemini Flash OCR & Auto-Fallback Cascade
+export async function parseReceiptImage(base64DataUrl, apiKey, fallbackCurrency = 'KRW') {
+  if (!apiKey || !apiKey.trim()) {
+    throw new Error('Please enter a valid Google AI Studio API key in Settings.');
   }
+
+  // Strip all invisible linebreaks, tabs, or whitespace from copy-paste
+  const cleanKey = apiKey.trim().replace(/\s+/g, '');
+  const base64Data = base64DataUrl.split(',')[1];
+  const mimeType = base64DataUrl.split(';')[0].split(':')[1] || 'image/jpeg';
+
+  const prompt = `You are an audit OCR assistant for production receipts.
+Analyze this receipt image and extract:
+1. vendor: Name of the business/merchant (in Korean or English as printed).
+2. date: Purchase date in YYYY-MM-DD format (if only year/month/day or 2-digit year is visible, infer the full year accurately).
+3. total: Final total amount paid as a pure number without currency symbols or commas.
+4. vat: Included tax/VAT as a pure number (or 0 if not stated).
+5. category: One short category (e.g., Catering, Parking, Toll / Hi-Pass, Equipment, Fuel, Supplies).
+6. currency: ISO 3-letter currency code (e.g., KRW, USD, EUR). Default to "${fallbackCurrency}" if Korean won or not specified.
+
+Respond ONLY with valid JSON in this exact structure:
+[
+  {
+    "vendor": "Merchant Name",
+    "date": "YYYY-MM-DD",
+    "total": 15000,
+    "vat": 1363,
+    "category": "Catering",
+    "currency": "${fallbackCurrency}",
+    "warning": ""
+  }
+]`;
+
+  const payload = {
+    contents: [
+      {
+        parts: [
+          { text: prompt },
+          {
+            inlineData: {
+              mimeType,
+              data: base64Data
+            }
+          }
+        ]
+      }
+    ],
+    generationConfig: {
+      temperature: 0.1,
+      responseMimeType: 'application/json'
+    }
+  };
+
+  // Model cascade: Tries 2.5-flash -> 2.0-flash -> 1.5-flash-latest -> 1.5-flash
+  const candidateModels = [
+    'gemini-2.5-flash',
+    'gemini-2.0-flash',
+    'gemini-1.5-flash-latest',
+    'gemini-1.5-flash'
+  ];
+
+  let lastError = null;
+
+  for (const model of candidateModels) {
+    try {
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(cleanKey)}`;
+
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+
+      // If this specific model returns 404 (model not found on his account/tier), continue to the next model
+      if (response.status === 404) {
+        lastError = new Error(`Model ${model} not found (404)`);
+        continue;
+      }
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`API Error (${response.status}): ${errorText}`);
+      }
+
+      const result = await response.json();
+      const rawText = result.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (!rawText) throw new Error('No legible text found on this receipt.');
+
+      const parsed = JSON.parse(rawText);
+      return Array.isArray(parsed) ? parsed : [parsed];
+    } catch (err) {
+      // If it's a 404 error, try next candidate model
+      if (err.message && err.message.includes('404')) {
+        lastError = err;
+        continue;
+      }
+      throw err;
+    }
+  }
+
+  // If all models in the cascade returned 404, throw informative error
+  throw lastError || new Error('Could not connect to Gemini OCR. Please verify your Google AI Studio key has API access enabled.');
 }

@@ -40,7 +40,7 @@ function calculateDueDate(invoiceDate, termsPreset) {
   return null;
 }
 
-/* Floating Game-HUD Toast Controller */
+/* Floating Game-HUD Toast Controller (2-line responsive support) */
 function message(text, persistent = false) {
   const toast = $('#hud-toast');
   const textEl = $('#hud-toast-text');
@@ -60,7 +60,7 @@ function message(text, persistent = false) {
   if (!persistent) {
     messageTimer = setTimeout(() => {
       toast.classList.remove('is-visible');
-    }, 2400);
+    }, 2600);
   }
 }
 
@@ -77,7 +77,7 @@ function fail(error) {
 
   messageTimer = setTimeout(() => {
     toast.classList.remove('is-visible', 'is-error');
-  }, 3500);
+  }, 3800);
 }
 
 function setting(key) {
@@ -129,10 +129,9 @@ function save() {
     .catch(error => {
       setSaveStatus('Not saved', '#f07c74');
       fail(new Error(`Could not save shoot: ${error.message}`));
-      throw error;
+      // Do not re-throw error to avoid locking up subsequent autosaves
     });
 
-  saveChain.catch(() => { });
   return saveChain;
 }
 
@@ -162,7 +161,6 @@ function summary() {
   if ($('#summary-name')) $('#summary-name').textContent = state.project.projectTitle || 'Untitled production';
   if ($('#labor-total')) $('#labor-total').textContent = money(t.labor, c);
 
-  // Format tax display with explicit +/- sign
   const taxSign = t.isWithholding ? '−' : '+';
   const taxLabelText = t.isWithholding ? 'Withholding tax' : 'Labor tax (VAT)';
   if ($('#tax-label')) $('#tax-label').innerHTML = `${taxLabelText} <small id="tax-percent">(${state.project.taxRate}%)</small>`;
@@ -174,6 +172,7 @@ function summary() {
   const pending = state.expenses.filter(r => !r.verified).length;
   const statusPill = $('#receipt-status-pill');
   if (statusPill) {
+    // Completely hide when no receipts exist to prevent empty orange box
     if (state.expenses.length === 0) {
       statusPill.style.display = 'none';
       statusPill.hidden = true;
@@ -222,12 +221,19 @@ function panel(title, description, content, tag = '') {
 
 function projectView() {
   const currentTerms = state.project.termsPreset || 'due_receipt';
-  const isLocked = !profileEditing;
+  // If contractor profile has no name, default to unlocked editing mode so users immediately know to fill it
+  const isProfileEmpty = !state.contractor.name?.trim();
+  const isLocked = !profileEditing && !isProfileEmpty;
   const autoNumberPlaceholder = state.project.defaultInvoiceNumber || `WS-${today().replaceAll('-', '')}-001`;
 
   return panel('Set the scene.', 'Production metadata for the final invoice.',
     `<div class="form-grid">
-      ${field('Project title', 'project.projectTitle', 'text', 'placeholder="e.g. Autumn campaign — Seoul" maxlength="200"')}
+      <div class="full">
+        <label>Project title
+          <input data-field="project.projectTitle" id="project-title-input" type="text" value="${e(getPath('project.projectTitle'))}" placeholder="e.g. Autumn Commercial — Seoul (Type shoot name here)" maxlength="200" autofocus>
+        </label>
+        ${!state.project.projectTitle ? '<p class="hint guide-hint">↑ Start here: Name your current shoot or job to begin.</p>' : ''}
+      </div>
       ${field('Client / production company', 'project.clientName', 'text', 'placeholder="Production studio or client name" maxlength="200"')}
       ${select('Currency', 'project.currency', [['KRW', 'KRW — Korean won'], ['USD', 'USD — US dollar'], ['EUR', 'EUR — Euro']])}
       ${field('Invoice number', 'project.invoiceNumber', 'text', `placeholder="${e(autoNumberPlaceholder)}" maxlength="100"`)}
@@ -253,40 +259,54 @@ function projectView() {
       ${area('Client address', 'project.clientAddress')}
     </div>`, 'PRODUCTION\nDETAILS') +
 
-    panel('Contractor Profile Vault', 'Your verified contractor credentials. Locked to prevent accidental changes.',
+    panel('Your Contractor Info (Saved Preset)', 'Enter your personal or company billing info once. Save it to auto-apply on future shoots.',
       `<div class="profile-vault-card ${isLocked ? 'locked' : 'editing'}">
         <div class="vault-top">
           <div class="vault-status">
             <span class="vault-icon">${isLocked ? '🔒' : '✎'}</span>
-            <strong>${isLocked ? 'Profile Locked & Active' : 'Editing Contractor Profile'}</strong>
+            <strong>${isLocked ? 'Contractor Preset Active (Locked)' : 'Enter Your Billing Information'}</strong>
           </div>
           <button type="button" class="action-btn" data-action="${isLocked ? 'edit-profile' : 'save-profile'}">
-            ${isLocked ? '✎ Edit Profile' : '✓ Lock & Save Default'}
+            ${isLocked ? '✎ Edit Info' : '✓ Lock & Save as Default'}
           </button>
         </div>
 
         <div class="form-grid" style="margin-top:14px;">
-          ${field('Contractor / Company', 'contractor.name', 'text', isLocked ? 'disabled' : 'placeholder="Your name or studio"')}
-          ${field('Email', 'contractor.email', 'email', isLocked ? 'disabled' : '')}
-          ${field('Phone', 'contractor.phone', 'tel', isLocked ? 'disabled' : '')}
-          ${field('Business registration / Tax ID', 'contractor.taxId', 'text', isLocked ? 'disabled' : '')}
-          ${area('Business Address', 'contractor.address', isLocked ? 'disabled' : '')}
-          ${field('Bank Name', 'contractor.bankName', 'text', isLocked ? 'disabled' : '')}
-          ${field('Account Number', 'contractor.accountNumber', 'text', isLocked ? 'disabled' : '')}
-          ${area('Payment Terms', 'contractor.paymentTerms', isLocked ? 'disabled' : '')}
+          ${field('Contractor / Company name', 'contractor.name', 'text', isLocked ? 'disabled' : 'placeholder="Your name or production studio"')}
+          ${field('Email', 'contractor.email', 'email', isLocked ? 'disabled' : 'placeholder="billing@example.com"')}
+          ${field('Phone', 'contractor.phone', 'tel', isLocked ? 'disabled' : 'placeholder="+82 10-0000-0000"')}
+          ${field('Business registration / Tax ID', 'contractor.taxId', 'text', isLocked ? 'disabled' : 'placeholder="Registration or Tax ID (or n/a)"')}
+          ${area('Business Address', 'contractor.address', isLocked ? 'disabled' : 'placeholder="Street, City, Country"')}
+          ${field('Bank Name', 'contractor.bankName', 'text', isLocked ? 'disabled' : 'placeholder="e.g. Shinhan Bank / Wells Fargo"')}
+          ${field('Account Number', 'contractor.accountNumber', 'text', isLocked ? 'disabled' : 'placeholder="Account or IBAN"')}
+          ${area('Payment Terms / Instructions', 'contractor.paymentTerms', isLocked ? 'disabled' : 'placeholder="e.g. Payment due within 15 days of invoice."')}
         </div>
-      </div>`, 'PROFILE\nVAULT');
+      </div>`, 'CONTRACTOR\nINFO');
 }
 
-const laborTypes = ['Shoot Day', 'Prep Day', 'Travel Day', 'Half Day', 'Overtime', 'Kit Rental', 'Equipment Rental', 'Assistant', 'Post-production', 'Other'];
+// Unified work presets: Merged Kit/Equipment & added Retainer / Flat Fee / Weekly options
+const laborTypes = [
+  'Shoot Day',
+  'Prep Day',
+  'Travel Day',
+  'Half Day',
+  'Overtime',
+  'Monthly Retainer',
+  'Weekly Rate',
+  'Project Buyout / Flat Fee',
+  'Kit & Equipment Rental',
+  'Assistant',
+  'Post-production',
+  'Other'
+];
 
 function workView() {
   const rateStep = state.project.currency === 'KRW' ? '1000' : 'any';
   const taxMode = state.project.taxType || 'vat';
 
-  return panel('Every hour. Every piece of kit.', 'Build your agreed day rates and equipment fees.',
+  return panel('Every hour. Every piece of kit.', 'Build your agreed day rates, equipment fees, or monthly retainers.',
     `<div class="inline-action-row">
-      <label>Add a work item
+      <label>Add a rate or retainer
         <select id="labor-kind">${laborTypes.map(t => `<option>${t}</option>`).join('')}</select>
       </label>
       <button class="primary" data-action="add-labor">＋ Add item</button>
@@ -299,8 +319,8 @@ function workView() {
         </div>
         <div class="form-grid">
           ${field('Description', `labor.${i}.description`)}
-          ${field('Work date', `labor.${i}.date`, 'date')}
-          ${select('Unit', `labor.${i}.unit`, ['day', 'hour', 'item', 'km', 'mile'])}
+          ${field('Work date / Period', `labor.${i}.date`, 'date')}
+          ${select('Unit', `labor.${i}.unit`, ['day', 'month', 'week', 'flat', 'hour', 'item', 'km', 'mile'])}
           ${field('Quantity', `labor.${i}.quantity`, 'number', 'min="0" max="1000000" step="0.5"')}
           ${field(`Rate (${state.project.currency})`, `labor.${i}.rate`, 'number', `min="0" max="1000000000000" step="${rateStep}"`)}
         </div>
@@ -308,7 +328,7 @@ function workView() {
           <input type="checkbox" data-field="labor.${i}.taxable" ${r.taxable ? 'checked' : ''}>
           <span>Taxable item</span>
         </label>
-      </div>`).join('') : '<div class="empty" style="padding:20px 0; color:var(--muted);">No work logged yet. Add your first shoot day above.</div>'}
+      </div>`).join('') : '<div class="empty" style="padding:20px 0; color:var(--muted);">No rates or retainers logged yet. Add your first item above.</div>'}
     
     <!-- Tax Configuration Section with Model Switch -->
     <div class="form-grid" style="margin-top:24px; padding-top:18px; border-top:1px solid var(--line);">
@@ -455,7 +475,7 @@ function invoiceView() {
         </details>
       </div>
 
-      <!-- Balanced 2x2 Action Button Grid -->
+      <!-- Balanced 2x2 Equalized Action Button Grid -->
       <div class="actions invoice-action-bar">
         <button class="primary" data-action="export">
           <svg class="btn-icon" viewBox="0 0 24 24"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>
@@ -479,7 +499,7 @@ function invoiceView() {
     `<!-- Proportional Scaled Viewport -->
     <div class="preview-prompt-bar">
       <span>Live Preview</span>
-      <span class="edit-zoom-pill" id="open-zoom-modal">🔍 Full Size</span>
+      <span class="edit-zoom-pill" id="open-zoom-modal">🔍 Edit & Zoom</span>
     </div>
     <div class="preview-viewport-box" id="scaler-viewport" title="Tap to expand and edit">
       <div class="preview-scaler-stage" id="scaler-stage">
@@ -487,9 +507,10 @@ function invoiceView() {
       </div>
     </div>
 
+    <!-- Natural Size Scrollable Edit Modal -->
     <dialog id="invoice-zoom-modal">
       <div class="zoom-modal-header">
-        <span>Tap any dashed field to edit</span>
+        <span>Tap any dashed outline to edit directly</span>
         <button type="button" id="close-zoom-modal" class="primary">Done</button>
       </div>
       <div class="zoom-modal-body" id="invoice-modal-backdrop">
@@ -844,16 +865,26 @@ async function exportPDF() {
 }
 
 const actions = {
+  // New line items prepend to top (unshift) so users can immediately edit
   'add-labor': async () => {
     const kind = $('#labor-kind').value;
-    state.labor.push({
+
+    // Auto-detect unit for monthly retainer, weekly rate, and buyout
+    let unit = 'day';
+    if (kind === 'Monthly Retainer') unit = 'month';
+    else if (kind === 'Weekly Rate') unit = 'week';
+    else if (kind === 'Project Buyout / Flat Fee') unit = 'flat';
+    else if (kind === 'Overtime') unit = 'hour';
+    else if (kind.includes('Rental')) unit = 'item';
+
+    state.labor.unshift({
       id: uid(),
       type: kind,
       description: kind,
       date: state.project.shootStart || today(),
       quantity: 1,
       rate: 0,
-      unit: kind === 'Overtime' ? 'hour' : kind.includes('Rental') ? 'item' : 'day',
+      unit,
       taxable: true
     });
     await save();
@@ -910,7 +941,7 @@ const actions = {
     localStorage.setItem('wrapsheet.defaultContractor', JSON.stringify(state.contractor));
     save();
     render();
-    message(`★ Profile locked & saved as default (${state.contractor.name || 'Contractor'}).`);
+    message(`★ Preset locked & saved as default (${state.contractor.name || 'Contractor'}).`);
   },
   'open-settings': () => {
     $('#api-key').value = setting('apiKey');
@@ -1190,7 +1221,6 @@ document.addEventListener('change', async event => {
         }
       }
 
-      // Re-render work view when tax type toggles to update placeholder and hints
       if (el.dataset.field === 'project.taxType') {
         render();
       }
@@ -1284,7 +1314,8 @@ $('#settings-button')?.addEventListener('click', () => {
 $('#close-settings')?.addEventListener('click', () => $('#settings').close());
 $('#settings-form')?.addEventListener('submit', event => {
   event.preventDefault();
-  setSetting('apiKey', $('#api-key').value.trim());
+  const cleanKey = $('#api-key').value.replace(/\s+/g, '');
+  setSetting('apiKey', cleanKey);
   $('#settings').close();
   message('API key saved.');
   render();
