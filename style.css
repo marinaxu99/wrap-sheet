@@ -354,17 +354,13 @@ input[type="date"],
   letter-spacing: -0.5px;
 }
 
-.mark {
-  background: var(--accent);
-  color: #12181b;
-  font-size: 16px;
-  font-weight: 900;
+.brand-icon {
   width: 28px;
   height: 28px;
   border-radius: 6px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  object-fit: contain;
+  display: block;
+  flex-shrink: 0;
 }
 
 .beta {
@@ -1708,10 +1704,9 @@ dialog#receipt-inspect-modal[open] {
     font-size: 17px;
   }
 
-  .mark {
+  .brand-icon {
     width: 26px;
     height: 26px;
-    font-size: 15px;
   }
 
   .beta {
