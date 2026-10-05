@@ -1,4 +1,4 @@
-// Compress and downscale receipt images to avoid payload errors
+// Compress and downscale receipt images to avoid payload timeouts
 export async function compressImage(file, maxDimension = 1200, quality = 0.8) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -30,14 +30,21 @@ export async function compressImage(file, maxDimension = 1200, quality = 0.8) {
   });
 }
 
-// Parse receipt image with Gemini Flash OCR & Auto-Fallback Cascade
+// 1. High-volume, rate-resilient model hierarchy
+const MODEL_TIERS = [
+  "gemini-3.5-flash-lite",
+  "gemini-2.5-flash",
+  "gemini-3.5-flash",
+  "gemini-2.0-flash"
+];
+
+// 2. Parse receipt image with Gemini OCR & Automatic Fallback Loop
 export async function parseReceiptImage(base64DataUrl, apiKey, fallbackCurrency = 'KRW') {
-  if (!apiKey || !apiKey.trim()) {
+  const cleanKey = apiKey?.trim().replace(/\s+/g, '');
+  if (!cleanKey) {
     throw new Error('Please enter a valid Google AI Studio API key in Settings.');
   }
 
-  // Strip all invisible linebreaks, tabs, or whitespace from copy-paste
-  const cleanKey = apiKey.trim().replace(/\s+/g, '');
   const base64Data = base64DataUrl.split(',')[1];
   const mimeType = base64DataUrl.split(';')[0].split(':')[1] || 'image/jpeg';
 
@@ -63,73 +70,65 @@ Respond ONLY with valid JSON in this exact structure:
   }
 ]`;
 
-  const payload = {
-    contents: [
-      {
-        parts: [
-          { text: prompt },
-          {
-            inlineData: {
-              mimeType,
-              data: base64Data
-            }
-          }
-        ]
-      }
-    ],
-    generationConfig: {
-      temperature: 0.1,
-      responseMimeType: 'application/json'
-    }
-  };
-
-  // Model cascade: Tries 2.5-flash -> 2.0-flash -> 1.5-flash-latest -> 1.5-flash
-  const candidateModels = [
-    'gemini-2.5-flash',
-    'gemini-2.0-flash',
-    'gemini-1.5-flash-latest',
-    'gemini-1.5-flash'
-  ];
-
   let lastError = null;
 
-  for (const model of candidateModels) {
+  for (const model of MODEL_TIERS) {
     try {
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(cleanKey)}`;
+      const generationConfig = {
+        responseMimeType: "application/json",
+        maxOutputTokens: 2500,
+        temperature: 0.1
+      };
 
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+      // Only apply thinkingBudget to gemini-2.5-flash to prevent 400 errors on Lite tiers
+      if (model === "gemini-2.5-flash") {
+        generationConfig.thinkingConfig = { thinkingBudget: 0 };
+      }
+
+      const payload = {
+        contents: [
+          {
+            role: "user",
+            parts: [
+              { text: prompt },
+              {
+                inlineData: {
+                  mimeType,
+                  data: base64Data
+                }
+              }
+            ]
+          }
+        ],
+        generationConfig
+      };
+
+      const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(cleanKey)}`;
+
+      const response = await fetch(endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload)
       });
 
-      // If this specific model returns 404 (model not found on his account/tier), continue to the next model
-      if (response.status === 404) {
-        lastError = new Error(`Model ${model} not found (404)`);
-        continue;
-      }
-
       if (!response.ok) {
         const errorText = await response.text();
-        throw new Error(`API Error (${response.status}): ${errorText}`);
+        lastError = new Error(`${model} failed (${response.status}): ${errorText}`);
+        continue;
       }
 
       const result = await response.json();
       const rawText = result.candidates?.[0]?.content?.parts?.[0]?.text;
-      if (!rawText) throw new Error('No legible text found on this receipt.');
+      if (!rawText) throw new Error("Empty response from AI.");
 
       const parsed = JSON.parse(rawText);
       return Array.isArray(parsed) ? parsed : [parsed];
+
     } catch (err) {
-      // If it's a 404 error, try next candidate model
-      if (err.message && err.message.includes('404')) {
-        lastError = err;
-        continue;
-      }
-      throw err;
+      lastError = err;
+      continue;
     }
   }
 
-  // If all models in the cascade returned 404, throw informative error
-  throw lastError || new Error('Could not connect to Gemini OCR. Please verify your Google AI Studio key has API access enabled.');
+  throw lastError || new Error("All AI OCR tiers are temporarily unavailable. Please check your API key or network connection.");
 }
