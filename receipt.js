@@ -1,4 +1,4 @@
-// Compress and downscale receipt images to avoid payload timeouts
+// Compress and downscale receipt images to avoid upload payload timeouts
 export async function compressImage(file, maxDimension = 1200, quality = 0.8) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -30,16 +30,26 @@ export async function compressImage(file, maxDimension = 1200, quality = 0.8) {
   });
 }
 
-// 1. High-volume, rate-resilient model hierarchy
+// 1. High-volume, rate-resilient model hierarchy (Flash-Lite first for maximum RPM/RPD)
 const MODEL_TIERS = [
   "gemini-3.5-flash-lite",
   "gemini-2.5-flash",
-  "gemini-3.5-flash",
-  "gemini-2.0-flash"
+  "gemini-3.5-flash"
 ];
 
-// 2. Parse receipt image with Gemini OCR & Automatic Fallback Loop
+// Hash helper for client-side session caching of receipt payloads
+function hashString(str) {
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    hash = (hash << 5) - hash + str.charCodeAt(i);
+    hash |= 0;
+  }
+  return hash.toString(36);
+}
+
+// 2. Parse receipt image with Gemini OCR & Automatic Multi-Tier Fallback Loop
 export async function parseReceiptImage(base64DataUrl, apiKey, fallbackCurrency = 'KRW') {
+  // 1. Aggressive API key sanitization (removes trailing spaces, newlines, tabs)
   const cleanKey = apiKey?.trim().replace(/\s+/g, '');
   if (!cleanKey) {
     throw new Error('Please enter a valid Google AI Studio API key in Settings.');
@@ -47,6 +57,15 @@ export async function parseReceiptImage(base64DataUrl, apiKey, fallbackCurrency 
 
   const base64Data = base64DataUrl.split(',')[1];
   const mimeType = base64DataUrl.split(';')[0].split(':')[1] || 'image/jpeg';
+
+  // 2. Client-side Session Caching (0 token cost on duplicate rescans/reloads)
+  const cacheKey = `wrapsheet_ocr_${hashString(base64Data.slice(0, 500) + base64Data.length)}_${fallbackCurrency}`;
+  try {
+    const cached = sessionStorage.getItem(cacheKey);
+    if (cached) {
+      return JSON.parse(cached);
+    }
+  } catch { }
 
   const prompt = `You are an audit OCR assistant for production receipts.
 Analyze this receipt image and extract:
@@ -72,15 +91,16 @@ Respond ONLY with valid JSON in this exact structure:
 
   let lastError = null;
 
+  // 3. Automated Model Fallback Loop
   for (const model of MODEL_TIERS) {
     try {
       const generationConfig = {
         responseMimeType: "application/json",
-        maxOutputTokens: 2500,
+        maxOutputTokens: 2500, // Ample headroom prevents JSON parse cutoffs from reasoning
         temperature: 0.1
       };
 
-      // Only apply thinkingBudget to gemini-2.5-flash to prevent 400 errors on Lite tiers
+      // Only add thinkingBudget to standard 2.5-flash to prevent 400 errors on Lite tiers
       if (model === "gemini-2.5-flash") {
         generationConfig.thinkingConfig = { thinkingBudget: 0 };
       }
@@ -111,6 +131,8 @@ Respond ONLY with valid JSON in this exact structure:
         body: JSON.stringify(payload)
       });
 
+      // If rate-limited (429), not found (404), invalid parameter (400), or busy (503),
+      // capture error and silently cascade to the next tier in the loop
       if (!response.ok) {
         const errorText = await response.text();
         lastError = new Error(`${model} failed (${response.status}): ${errorText}`);
@@ -122,11 +144,18 @@ Respond ONLY with valid JSON in this exact structure:
       if (!rawText) throw new Error("Empty response from AI.");
 
       const parsed = JSON.parse(rawText);
-      return Array.isArray(parsed) ? parsed : [parsed];
+      const finalResult = Array.isArray(parsed) ? parsed : [parsed];
+
+      // Cache valid result in session storage
+      try {
+        sessionStorage.setItem(cacheKey, JSON.stringify(finalResult));
+      } catch { }
+
+      return finalResult;
 
     } catch (err) {
       lastError = err;
-      continue;
+      continue; // Fail over to next tier
     }
   }
 
