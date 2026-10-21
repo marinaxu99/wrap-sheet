@@ -1,3 +1,4 @@
+import { renderPDFTemplate } from './pdf-template.js';
 import { money, totals, round } from './model.js';
 
 export const escapeHTML = v => String(v ?? '').replace(/[&<>"']/g, c => ({
@@ -48,6 +49,7 @@ export function checkTemplate(html) {
 }
 
 export function renderInvoice(template, s, { editable = false } = {}) {
+  if (template?.pdf) return renderPDFTemplate(template, s);
   const e = escapeHTML, c = s.project.currency, t = totals(s), o = s.invoice.options || {};
   const currentPresetId = template?.id || s.invoice.templateId || 'production';
 

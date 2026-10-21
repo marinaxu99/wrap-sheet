@@ -2,6 +2,9 @@ import * as db from './db.js';
 import { newProject, uid, today, money, totals, round, validNumber, validDate, validateReceipt } from './model.js';
 import { renderInvoice, presets, sanitizeTemplate, checkTemplate, escapeHTML as e } from './invoice.js';
 import { compressImage, parseReceiptImage } from './receipt.js';
+import { importPDF, renderPDFTemplate, validateMapping } from './pdf-template.js';
+import { editPDFTemplate } from './pdf-editor.js';
+import './preview-hint.js';
 
 const $ = s => document.querySelector(s);
 let state, projects = [], templates = [], images = new Map(), tab = 'project', saveChain = Promise.resolve(), revision = 0, scanBusy = false, renderBusy = false, messageTimer = null;
@@ -336,7 +339,7 @@ function workView() {
       ['vat', 'VAT / Sales Tax (+ Added to Total)'],
       ['withholding', 'Withholding Tax / 원천징수 (− Deducted from Payout)']
     ])}
-      ${field(taxMode === 'withholding' ? 'Withholding Rate (%) — e.g. 3.3' : 'VAT Rate (%) — e.g. 10', 'project.taxRate', 'number', 'min="0" max="100" step="0.1" placeholder="e.g. 3.3 or 10"')}
+      ${field(taxMode === 'withholding' ? 'Withholding Rate (%) — e.g. 3.3' : 'VAT Rate (%) — e.g. 10', 'project.taxRate', 'number', `min="0" max="100" step="0.1" placeholder="${taxMode === 'withholding' ? '3.3' : '10'}"`)}
     </div>`, 'WORK\nLOG');
 }
 
@@ -467,6 +470,12 @@ function invoiceView() {
           </label>
         </div>
 
+        <section class="personal-template-card">
+          <div><span class="eyebrow">YOUR OWN FORMAT</span><h3>Bring your invoice.</h3><p>Upload a blank PDF. Review detected fields once, then reuse its layout across projects.</p></div>
+          <div class="deck-row"><label class="file-button deck-btn">Upload PDF template<input type="file" id="pdf-template-input" accept=".pdf,application/pdf"></label>
+          ${template()?.pdf ? '<button data-action="edit-pdf-template">Edit field mapping</button>' : ''}</div>
+          <p class="hint">Your saved PDF templates appear in Layout Preset. Built-in WrapSheet styles and Upload HTML still work as before. PDF values are edited in Project, Work, and Receipts.</p>
+        </section>
         <details style="margin-top: 18px;">
           <summary style="cursor:pointer; font-size:12px; font-weight:600; color:var(--accent);">Customize Document Section Headings ▾</summary>
           <div class="form-grid" style="margin-top:12px;">
@@ -501,7 +510,7 @@ function invoiceView() {
       <span>Live Preview</span>
       <span class="edit-zoom-pill" id="open-zoom-modal">🔍 Edit & Zoom</span>
     </div>
-    <div class="preview-viewport-box" id="scaler-viewport" title="Tap to expand and edit">
+    <div class="preview-viewport-box" id="scaler-viewport" role="button" tabindex="0" aria-label="Expand invoice and edit">
       <div class="preview-scaler-stage" id="scaler-stage">
         <div id="invoice-preview" class="invoice-paper"></div>
       </div>
@@ -510,7 +519,7 @@ function invoiceView() {
     <!-- Natural Size Scrollable Edit Modal -->
     <dialog id="invoice-zoom-modal">
       <div class="zoom-modal-header">
-        <span>Tap any dashed outline to edit directly</span>
+        <span>${template()?.pdf ? 'Edit values in Project, Work and Receipts; adjust positions with Edit field mapping.' : 'Tap any dashed outline to edit directly'}</span>
         <button type="button" id="close-zoom-modal" class="primary">Done</button>
       </div>
       <div class="zoom-modal-body" id="invoice-modal-backdrop">
@@ -550,11 +559,13 @@ function preview() {
   const stateData = enrichedState();
   const accent = state.invoice.accent || '#a8c3d0';
 
+  el.classList.toggle('has-pdf-template', Boolean(currentTpl.pdf));
   el.style.setProperty('--invoice-accent', accent);
   el.innerHTML = renderInvoice(currentTpl, stateData, { editable: false });
 
   const modalEl = $('#invoice-modal-content');
   if (modalEl) {
+    modalEl.classList.toggle('has-pdf-template', Boolean(currentTpl.pdf));
     modalEl.style.setProperty('--invoice-accent', accent);
     modalEl.innerHTML = renderInvoice(currentTpl, stateData, { editable: true });
   }
@@ -614,6 +625,9 @@ function updateField(path, value, element) {
     if (path.endsWith('.rate') || /^expenses\.\d+\.(total|vat)$/.test(path)) value = round(value, state.project.currency);
   }
   setPath(path, value);
+  if (path === 'project.taxType' && old !== value) {
+    state.project.taxRate = value === 'withholding' ? 3.3 : 10;
+  }
   save();
   summary();
   if (path.startsWith('labor.')) {
@@ -806,6 +820,52 @@ function navigateInspector(delta) {
   }
 }
 
+async function exportPersonalPDF(number) {
+  const t = template(), snapshot = structuredClone(enrichedState());
+  validateMapping(t);
+  if (!t.pdf.confirmed || t.pdf.fields.some(f => !f.reviewed)) throw Error('Review and save your PDF field mapping first.');
+  const required = ['clientName', 'invoiceNumber', 'totalAmountDue'];
+  if (snapshot.labor.length) required.push('laborTable');
+  if (snapshot.expenses.some(r => r.verified)) required.push('expenseTable');
+  if (totals(snapshot).tax) required.push('taxTotal');
+  const missing = required.filter(key => !t.pdf.fields.some(f => f.key === key));
+  if (missing.length) throw Error('Edit PDF mapping and add: ' + missing.join(', '));
+  if (snapshot.expenses.some(r => !r.verified)) throw Error('Verify all receipts before exporting.');
+  renderBusy = true;
+  const root = document.createElement('div'); root.className = 'pdf-export-root';
+  root.innerHTML = renderPDFTemplate(t, snapshot);
+  document.body.append(root);
+  try {
+    message('Rendering your personal invoice…'); await save();
+    await document.fonts.load('12px WrapKorean'); await document.fonts.ready;
+    await Promise.all([...root.querySelectorAll('img')].map(img => img.decode()));
+    for (const field of root.querySelectorAll('.pdf-filled-field')) {
+      if (field.scrollHeight > field.clientHeight + 1 || field.scrollWidth > field.clientWidth + 1)
+        throw Error('Text does not fit in ' + field.dataset.pdfField + '. Edit mapping to enlarge its box or reduce text size.');
+    }
+    const pages = [...root.children].map((node, i) => ({node, points: t.pdf.pages[i].points}));
+    if (snapshot.invoice.options.showReceiptGallery) {
+      for (const r of snapshot.expenses.filter(r => r.verified)) {
+        const node = document.createElement('section'); node.className = 'pdf-proof-page';
+        node.innerHTML = `<h2>Receipt proof</h2><p>${e(r.vendor)} · ${e(r.date)} · ${e(money(r.total, snapshot.project.currency))}</p>${r.imageThumbnail ? `<img src="${e(r.imageThumbnail)}" alt="Receipt proof">` : '<p>Manual expense — no image attached.</p>'}`;
+        root.append(node); pages.push({node, points: [595.28, 841.89]});
+      }
+    }
+    await Promise.all([...root.querySelectorAll('img')].map(img => img.decode()));
+    const dummy = document.createElement('div'); dummy.style.height = '1px'; root.append(dummy);
+    const pdf = await window.html2pdf().set({margin: 0, jsPDF: {unit: 'pt', format: 'a4'}}).from(dummy).toPdf().get('pdf');
+    for (const {node, points} of pages) {
+      const [w, h] = points;
+      const canvas = await window.html2pdf().set({margin: 0, jsPDF: {unit: 'pt', format: [510, node.offsetHeight * .75], orientation: node.offsetHeight < 680 ? 'landscape' : 'portrait'}, html2canvas: {scale: 2, backgroundColor: '#fff', scrollX: 0, scrollY: 0}}).from(node).toCanvas().get('canvas');
+      pdf.addPage([w, h], w > h ? 'landscape' : 'portrait');
+      pdf.addImage(canvas.toDataURL('image/jpeg', .98), 'JPEG', 0, 0, w, h);
+    }
+    pdf.deletePage(1);
+    pdf.save(number.replace(/[^\p{L}\p{N}_-]/gu, '_') + '.pdf');
+    message('Personal invoice PDF exported.');
+  } finally {root.remove(); renderBusy = false;}
+}
+
 async function exportPDF() {
   const effectiveInvoiceNumber = state.project.invoiceNumber?.trim() || state.project.defaultInvoiceNumber;
 
@@ -817,6 +877,8 @@ async function exportPDF() {
   ) {
     throw new Error('Please fill in project, client, contractor name, and invoice number before exporting.');
   }
+
+  if (template()?.pdf) return exportPersonalPDF(effectiveInvoiceNumber);
 
   renderBusy = true;
   const button = document.querySelector('[data-action=export]');
@@ -865,6 +927,15 @@ async function exportPDF() {
 }
 
 const actions = {
+  'edit-pdf-template': async () => {
+    const current = template();
+    if (!current?.pdf) return;
+    const edited = await editPDFTemplate(current, enrichedState(), () => setting('apiKey'));
+    if (!edited) return;
+    await db.put('templates', edited);
+    templates[templates.findIndex(t => t.id === edited.id)] = edited;
+    render(); message('PDF template mapping saved.');
+  },
   // New line items prepend to top (unshift) so users can immediately edit
   'add-labor': async () => {
     const kind = $('#labor-kind').value;
@@ -1229,7 +1300,7 @@ document.addEventListener('change', async event => {
       return;
     }
 
-    if (['camera-input', 'receipt-input', 'logo-input', 'template-input'].includes(el.id)) {
+    if (['camera-input', 'receipt-input', 'logo-input', 'template-input', 'pdf-template-input'].includes(el.id)) {
       const files = [...el.files];
       if (el.id === 'camera-input' || el.id === 'receipt-input') {
         await handleBatchUpload(files);
@@ -1237,6 +1308,20 @@ document.addEventListener('change', async event => {
       if (el.id === 'logo-input' && files[0]) {
         state.contractor.logo = await compressImage(files[0], 500, 0.9);
         await save();
+      }
+      if (el.id === 'pdf-template-input' && files[0]) {
+        renderBusy = true;
+        try {
+          message('Reading PDF and detecting fields…', true);
+          const pdf = await importPDF(files[0]);
+          const draft = { id: uid(), name: files[0].name.replace(/\.pdf$/i, ''), pdf };
+          const mapped = await editPDFTemplate(draft, enrichedState(), () => setting('apiKey'));
+          if (mapped) {
+            await db.put('templates', mapped); templates.push(mapped);
+            state.invoice.templateId = mapped.id; await save();
+            message('Personal PDF template saved and ready to reuse.');
+          } else message('PDF import cancelled. Your current template is unchanged.');
+        } finally { renderBusy = false; }
       }
       if (el.id === 'template-input' && files[0]) {
         const raw = await files[0].text();
@@ -1373,3 +1458,9 @@ async function boot() {
 }
 
 boot();
+// Keyboard equivalent for the preview's existing click action.
+document.addEventListener('keydown', event => {
+  if (event.target.id === 'scaler-viewport' && ['Enter', ' '].includes(event.key)) {
+    event.preventDefault(); $('#invoice-zoom-modal')?.showModal(); preview();
+  }
+});
