@@ -8,15 +8,12 @@
     <meta name="apple-mobile-web-app-title" content="WrapSheet">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="theme-color" content="#141618">
-    <meta name="description" content="Log shoot days, scan receipts, and generate an audit-ready invoice.">
-    <title>WrapSheet — Ready for wrap.</title>
+    <meta name="description" content="Invoices and expense receipts for film crew.">
+    <title>WrapSheet</title>
 
-    <!-- Google Fonts: Montserrat (Body/Forms/Brand) & Space Grotesk (Technical Accents/Tags) -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link
-        href="https://fonts.googleapis.com/css2?family=Montserrat:ital,wght@0,300;0,400;0,500;0,600;0,700;0,800;1,400&family=Space+Grotesk:wght@500;600;700&display=swap"
-        rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
 
     <link rel="manifest" href="./manifest.json">
     <link rel="icon" href="./icon.svg">
@@ -27,122 +24,98 @@
 </head>
 
 <body>
-    <!-- Floating HUD Notification Toast -->
     <div id="hud-toast" class="hud-toast" role="status" aria-live="polite">
         <span class="hud-dot"></span>
         <span id="hud-toast-text" class="hud-text"></span>
     </div>
 
     <header class="topbar">
-        <a class="brand" href="#project">
-            <img class="brand-icon" src="./icon.svg" alt="WrapSheet Icon" width="28" height="28">
+        <a class="brand" href="#details">
+            <img class="brand-icon" src="./icon.svg" alt="" width="24" height="24">
             WrapSheet
-            <span class="beta">FIELD EDITION</span>
         </a>
+        <div class="invoice-switcher">
+            <select id="project-picker" aria-label="Open invoice"></select>
+            <button id="new-project" title="Start a new invoice">New invoice</button>
+            <button id="delete-project" class="danger-quiet" title="Delete the open invoice">Delete</button>
+            <span id="save-status" role="status">Saved</span>
+        </div>
         <div class="top-actions">
-            <button id="settings-button" class="quiet setup-btn">API & Setup ⚙</button>
+            <button id="profile-button" class="quiet">Profile</button>
+            <button id="settings-button" class="quiet">Settings</button>
         </div>
     </header>
 
     <main>
-        <div class="masthead">
-            <div class="masthead-copy">
-                <div class="eyebrow">FIELD WRAP ENGINE</div>
-                <h1>Ready for wrap<span>.</span></h1>
-                <p>Log shoot days, scan receipts, and export an audit-ready invoice.</p>
-            </div>
-
-            <!-- Production Deck Island -->
-            <div class="project-deck">
-                <div class="deck-current">
-                    <span class="badge-dot"></span>
-                    <strong id="deck-current-title">Untitled production</strong>
-                    <span id="save-status" role="status">● Autosaved</span>
-                </div>
-                <div class="deck-controls">
-                    <div class="switch-btn-wrap">
-                        <select id="project-picker" aria-label="Switch shoot"></select>
-                    </div>
-                    <button id="new-project" class="action-btn-icon-only" title="Create a new shoot">＋</button>
-                </div>
-            </div>
-        </div>
-
-        <nav class="steps" aria-label="Workspace steps">
-            <button data-tab="project"><span>01</span> Project</button>
-            <button data-tab="work"><span>02</span> Work</button>
-            <button data-tab="receipts"><span>03</span> Receipts</button>
-            <button data-tab="invoice"><span>04</span> Invoice</button>
+        <nav class="steps" aria-label="Invoice steps">
+            <button data-tab="details"><span>1</span> Details</button>
+            <button data-tab="work"><span>2</span> Work</button>
+            <button data-tab="receipts"><span>3</span> Receipts</button>
+            <button data-tab="invoice"><span>4</span> Invoice</button>
         </nav>
 
         <div class="workspace">
             <section id="view" aria-live="polite"></section>
 
-            <!-- Sticky Wrap Dock -->
             <aside class="summary">
-                <div class="eyebrow">LIVE WRAP SUMMARY</div>
-                <h2 id="summary-name">Untitled production</h2>
+                <div class="eyebrow" id="summary-format">Format</div>
+                <h2 id="summary-name">Untitled invoice</h2>
                 <div class="rule"></div>
-                <div class="sum-row"><span>Work & equipment</span><strong id="labor-total">₩0</strong></div>
-                <div class="sum-row"><span id="tax-label">Labor tax <small id="tax-percent"></small></span><strong
-                        id="tax-total">₩0</strong></div>
-                <div class="sum-row"><span>Reimbursable receipts</span><strong id="expense-total">₩0</strong></div>
+                <div class="sum-row"><span>Work</span><strong id="labor-total">₩0</strong></div>
+                <div class="sum-row"><span id="expense-label">Expenses</span><strong id="expense-total">₩0</strong></div>
+                <div class="sum-row"><span id="tax-label">VAT</span><strong id="tax-total">₩0</strong></div>
                 <div class="total">
-                    <span>TOTAL DUE</span>
+                    <span>Total due</span>
                     <strong id="grand-total">₩0</strong>
                 </div>
-                <div id="receipt-status-pill" class="status-indicator-pill" title="Tap to view pending receipts" hidden>
-                </div>
-                <button id="primary-action-btn" class="primary wide">Next: Add Work</button>
+                <div id="receipt-status-pill" class="status-indicator-pill" hidden></div>
+                <button id="primary-action-btn" class="primary wide">Next</button>
             </aside>
         </div>
-
-        <footer>
-            <span>WRAPSHEET <small> / LESS ADMIN. MORE CRAFT.</small></span>
-            <span>LOCAL FIRST · BUILT FOR CREW</span>
-        </footer>
     </main>
 
-    <!-- Interactive Deck Inspector Modal with Swipe & Controls -->
     <dialog id="receipt-inspect-modal">
         <div class="inspect-header">
             <div class="inspect-nav-controls">
-                <button type="button" id="inspect-prev-btn" class="action-btn inspect-nav-btn"
-                    title="Previous receipt (Left arrow)">← Prev</button>
-                <span id="inspect-counter">#1 of 1</span>
-                <button type="button" id="inspect-next-btn" class="action-btn inspect-nav-btn"
-                    title="Next receipt (Right arrow)">Next →</button>
+                <button type="button" id="inspect-prev-btn" class="action-btn inspect-nav-btn" title="Previous (left arrow)">← Previous</button>
+                <span id="inspect-counter">1 of 1</span>
+                <button type="button" id="inspect-next-btn" class="action-btn inspect-nav-btn" title="Next (right arrow)">Next →</button>
             </div>
             <button type="button" id="close-inspect-modal" class="primary">Done</button>
         </div>
         <div class="inspect-body" id="inspect-swipe-area">
             <div class="inspect-img-pane">
-                <img id="inspect-img-target" src="" alt="Receipt Large View">
+                <img id="inspect-img-target" src="" alt="Receipt">
             </div>
             <div class="inspect-form-pane" id="inspect-form-target"></div>
         </div>
     </dialog>
 
-    <dialog id="settings">
-        <form id="settings-form">
-            <div class="section-head">
-                <h2>API & Cloud Setup</h2>
-                <button type="button" id="close-settings" aria-label="Close settings">×</button>
-            </div>
-            <p>Receipt OCR runs via Google Gemini Flash API. Your images stay on this device until scanned.</p>
-            <label>Google Gemini API Key
-                <input id="api-key" type="password" autocomplete="off"
-                    placeholder="Paste your Google AI Studio API key">
-            </label>
-            <p class="hint">Stored in this browser's local memory only. Never uploaded to servers.</p>
-            <div style="display:flex; gap:10px; margin-top:16px;">
-                <button class="primary" type="submit" style="flex:1;">Save key</button>
-                <button type="button" id="clear-key">Remove key</button>
-            </div>
-        </form>
+    <dialog id="preview-modal">
+        <div class="zoom-modal-header">
+            <span>Invoice preview</span>
+            <button type="button" id="close-preview-modal" class="primary">Close</button>
+        </div>
+        <div class="zoom-modal-body">
+            <div id="preview-modal-content"></div>
+        </div>
     </dialog>
 
-    <script type="module" src="./install.js"></script>
+    <dialog id="settings" class="wide-dialog">
+        <div id="settings-body"></div>
+    </dialog>
+
+    <dialog id="profile-dialog" class="wide-dialog">
+        <form id="profile-form"></form>
+    </dialog>
+
+    <dialog id="new-dialog">
+        <div id="new-body"></div>
+    </dialog>
+
+    <dialog id="format-dialog" class="wide-dialog">
+        <form id="format-form"></form>
+    </dialog>
 </body>
 
 </html>

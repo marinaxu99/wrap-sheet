@@ -1,25 +1,40 @@
+# WrapSheet
 
-## October 21 update — personal PDF templates
+Invoices and expense receipts for film crew. Runs in the browser, stores everything on the device, no server.
 
-Existing WrapSheet presets, branding settings, and HTML uploads remain available.
+## Two ways to use it
 
-- The invoice preview hint now follows the pointer with a dark, themed design. Touch users keep the Edit & Zoom button.
-- Switching tax mode selects 10% for VAT or 3.3% for withholding. The percentage remains editable; these are convenience defaults, not a determination of your applicable tax.
-- In Invoice → Export & Storage → **Upload PDF template**, choose an unlocked PDF (maximum 15 MB, 5 pages). The app detects recognizable English/Korean labels and named text form fields locally.
-- Review every suggested box. Drag boxes or adjust their coordinates, size and text size. Add missing fields, especially Work items and Expense items. Confirm each field, then Save & use template. Saved PDF templates appear in Layout Preset and can be reused across projects on this device.
-- For complex/scanned layouts, expand Optional automatic layout analysis. **Send pages to Gemini & detect fields** sends images of every page to Google using your configured key; it replaces draft suggestions. This is optional and requires internet. Detection is advisory, never guaranteed.
-- Edit actual values in Project, Work and Receipts. PDF mappings fill from those values. Built-in invoice editing is unchanged. Branding and custom headings apply to WrapSheet templates; the uploaded PDF supplies its own design.
-- A blank template works best. Existing printed content is retained; enable **Cover existing value with white** to hide old values inside a reviewed box. This can also cover lines in that box. This is an overlay workflow, not arbitrary PDF text reconstruction.
-- Exports preserve source page proportions and use flattened images with Korean-capable text. They are not interactive PDF forms or vector/searchable text. Reviewed receipts can be appended as separate proof pages.
-- Export requires client, invoice number, total, and any applicable work/expense/tax mappings. Oversized content blocks export with a message. Automatic table pagination is not supported: enlarge the table box, reduce text size, or use a built-in template for long invoices.
-- Templates and rendered page images stay in IndexedDB. Clearing site data removes them. The original uploaded PDF is not stored; keep your own source copy. Editing a saved mapping affects every project using it on this device.
+**1. Invoicing another company in their format**
+- *Details* → **Billing format** → **Add client format from spreadsheet**. Choose a past invoice of theirs (.xlsx; from Google Sheets use File → Download → Microsoft Excel).
+- WrapSheet finds the line table, the invoice date / number / location cells, the totals and the fixed codes (project, cost centre). Check them and save.
+- Each month: upload receipts, import the Hi-pass statement after month end, then *Invoice* → **Download all**. You get the filled spreadsheet, the PDF, the receipts renamed (`yyyymmdd_category.pdf`, `_1` `_2` in time order) in the Drive folder name, and the expense log.
+- **Start next month's invoice** carries the format and fee forward and adds one to the invoice number.
+- If a company only has a PDF or Word invoice, ask Claude to make a WrapSheet format for it, then **Import format file**.
 
-### Deployment / dependencies
+**2. Crew hired by arki pictures**
+- Choose **arki pictures — crew invoice**, pick freelancer (3.3% withheld) or registered business (VAT), add work lines and receipts.
+- *Invoice* → **Submission package (.zip)**. It can't be exported until every receipt is reviewed and the profile is complete.
+- arki pictures opens the zip in Settings → **Review a crew submission**. Totals are recalculated and compared with the claimed totals, each line can be marked OK or Query, and **Copy feedback** writes the reply.
 
-Upload this **entire folder**, including new `pdf-template.js`, `pdf-editor.js`, `preview-hint.js` and `vendor/pdfjs/`. PDF.js 4.10.38 and its Apache-2.0 license are bundled for local/offline parsing. The service worker cache is versioned; close all app tabs and reopen after deploying to activate the update. First load must finish online before offline use.
+## Receipts
 
-Local preview: from this folder run `python3 -m http.server 8765`, then visit `http://localhost:8765`. Deploy as static files over HTTPS for PWA install and camera support. Configure your Gemini key in Settings; it remains in this browser's localStorage. No build step or backend is required.
+- PDF scans or photos. With a Gemini key (Settings) each receipt is read for date, time, vendor, location, amount actually charged, card and category. Gas-station pre-authorisation and cancellation lines are ignored.
+- Statuses: **To review** (not billed), **Verified**, **Needs check** (billed, flagged for confirmation), **Excluded** (kept, never billed).
+- **Import calendar (.ics)**: Google Calendar → Settings → Import & export → Export. Receipts are matched to shoot days. A receipt before 06:00 also matches the previous day's shoot as a return trip. Receipts on days with no shoot are flagged.
+- **Hi-pass statement**: each trip becomes a line. The "balance after use" column is checked for gaps. A jump in round 10,000s is treated as a top-up; any other break means a missing or excluded trip.
 
-### Validation
+## Files
 
-Checked in headless Chromium: tax mode defaults, pointer-following hint, local PDF label detection, field confirmation and save, Korean PDF export with visual inspection, overflow rejection, 390px viewport width, IndexedDB persistence and offline reopening. Gemini layout analysis has not been tested against a live paid API. Real-device iOS/Android testing and representative customer PDF templates remain recommended before a public release.
+`app.js` (interface) · `model.js` (data, totals) · `formats.js` (built-in formats, naming, checklist) · `sheet.js` (reads, fills and draws client .xlsx files at XML level, so styles and table styles survive) · `receipt.js` (PDF/image intake, Gemini reading, Hi-pass balance check) · `schedule.js` (.ics) · `exports.js` (zips, CSV, receipt PDFs, crew packages) · `invoice.js` (built-in invoice layouts) · `db.js` (IndexedDB).
+
+Bundled: PDF.js 4.10.38 (Apache-2.0), html2pdf (MIT), fflate 0.8.3 (MIT), pdf-lib 1.17.1 (MIT), Noto Sans KR (OFL). ExcelJS is not used.
+
+## Deploy
+
+Upload the whole folder as static files over HTTPS. Local test: `python3 -m http.server 8765` in this folder. The service worker caches the app for offline use. Bump `CACHE` in `sw.js` on every release.
+
+## Tested / not tested
+
+Tested in headless Chrome: format detection on the Eyeline sheet; replaying October #007 gives 396,810 expenses, 539,681 VAT and 5,936,491 total; LibreOffice recalculates generated sheets to the same totals; the table range follows the rows; spreadsheet PDF; receipt renaming; CSV; next month; crew package export and review import; 390px phone layout.
+
+Not tested: live Gemini responses (tests used mocked replies), real Hi-pass statement layouts, opening the generated .xlsx in Google Sheets, real iOS/Android devices.

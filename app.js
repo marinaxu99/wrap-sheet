@@ -1,1466 +1,1365 @@
 import * as db from './db.js';
-import { newProject, uid, today, money, totals, round, validNumber, validDate, validateReceipt } from './model.js';
-import { renderInvoice, presets, sanitizeTemplate, checkTemplate, escapeHTML as e } from './invoice.js';
-import { compressImage, parseReceiptImage } from './receipt.js';
-import { importPDF, renderPDFTemplate, validateMapping } from './pdf-template.js';
-import { editPDFTemplate } from './pdf-editor.js';
-import './preview-hint.js';
+import {
+  newProject, upgradeProject, newExpense, uid, today, money, totals, round, validNumber, validateReceipt,
+  isBillable, byDateTime, monthBounds, shiftMonth, taxInvoiceDeadline, compact, STATUS
+} from './model.js';
+import { renderInvoice, presets, escapeHTML as e } from './invoice.js';
+import { compressImage, readReceiptFile, isReceiptFile, parseReceipt, parseTollStatement, checkBalanceChain, matchCategory } from './receipt.js';
+import { BUILTIN_FORMATS, findFormat, isSheetFormat, fillPattern, checklist, exportFormat, importFormat, receiptFileNames } from './formats.js';
+import { readCalendarFile, suggestShootDays, eventsInRange } from './schedule.js';
+import { openBook, analyzeBook, fillWorkbook, renderBookHTML, renderBookCanvas, loadTemplate, bytesToBase64, SHEET_CSS, splitRef } from './sheet.js';
+import {
+  download, receiptFiles, expenseLogCSV, invoiceLines, sheetRowsForPaste, copyRich, zip, fileNames,
+  submissionManifest, readSubmission, SUBMISSION_FILE, strToU8
+} from './exports.js';
 
 const $ = s => document.querySelector(s);
-let state, projects = [], templates = [], images = new Map(), tab = 'project', saveChain = Promise.resolve(), revision = 0, scanBusy = false, renderBusy = false, messageTimer = null;
-let profileEditing = false;
-let inspectingExpenseId = null;
+let state, projects = [], formats = [], events = [], images = new Map();
+let tab = 'details', filter = 'all', saveChain = Promise.resolve(), revision = 0, busy = false, messageTimer = null;
+let inspectingId = null, touchStartX = 0, touchStartY = 0;
+const TABS = ['details', 'work', 'receipts', 'invoice'];
 
-let uploadProgress = { active: false, current: 0, total: 0 };
-let touchStartX = 0;
-let touchStartY = 0;
+const style = document.createElement('style'); style.textContent = SHEET_CSS; document.head.append(style);
 
-const SWATCHES = [
-  { name: 'Arki Slate', color: '#a8c3d0', desc: 'Cool Field Neutral' },
-  { name: 'Kodak Amber', color: '#d4a373', desc: 'Warm 3200K Tungsten' },
-  { name: 'Studio Olive', color: '#9aa899', desc: 'Arri Monitor Green' },
-  { name: 'Technicolor Carmine', color: '#c97a7e', desc: 'Vintage Film Wash' },
-  { name: 'Monochrome Silver', color: '#c8c8c4', desc: 'Classic B&W Starch' }
-];
-
-function addDays(isoDateStr, days) {
-  if (!isoDateStr) return '';
-  const [y, m, d] = isoDateStr.split('-').map(Number);
-  const date = new Date(y, m - 1, d);
-  date.setDate(date.getDate() + Number(days));
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
-}
-
-function calculateDueDate(invoiceDate, termsPreset) {
-  if (!invoiceDate) return '';
-  if (termsPreset === 'due_receipt') return invoiceDate;
-  if (termsPreset === 'net_15') return addDays(invoiceDate, 15);
-  if (termsPreset === 'net_30') return addDays(invoiceDate, 30);
-  if (termsPreset === 'net_60') return addDays(invoiceDate, 60);
-  return null;
-}
-
-/* Floating Game-HUD Toast Controller (2-line responsive support) */
+// ---- Small helpers --------------------------------------------------------------------------------
 function message(text, persistent = false) {
-  const toast = $('#hud-toast');
-  const textEl = $('#hud-toast-text');
-  if (!toast || !textEl) return;
-
+  const toast = $('#hud-toast'), textEl = $('#hud-toast-text');
   clearTimeout(messageTimer);
-
-  if (!text) {
-    toast.classList.remove('is-visible', 'is-error');
-    return;
-  }
-
+  if (!text) { toast.classList.remove('is-visible', 'is-error'); return; }
   textEl.textContent = text;
-  toast.classList.remove('is-error');
+  toast.classList.remove('is-error', 'is-visible');
+  void toast.offsetWidth;                       // restart the animation so a repeated message still shows
   toast.classList.add('is-visible');
-
-  if (!persistent) {
-    messageTimer = setTimeout(() => {
-      toast.classList.remove('is-visible');
-    }, 2600);
-  }
+  if (!persistent) messageTimer = setTimeout(() => toast.classList.remove('is-visible'), 2800);
 }
-
 function fail(error) {
+  console.error(error);
   const toast = $('#hud-toast');
-  const textEl = $('#hud-toast-text');
-  if (!toast || !textEl) return;
-
   clearTimeout(messageTimer);
-  const text = error.message || String(error);
-
-  textEl.textContent = text;
+  $('#hud-toast-text').textContent = error.message || String(error);
   toast.classList.add('is-visible', 'is-error');
+  messageTimer = setTimeout(() => toast.classList.remove('is-visible', 'is-error'), 5000);
+}
+const setting = key => { try { return localStorage.getItem(`wrapsheet.${key}`) || ''; } catch { return ''; } };
+const setSetting = (key, value) => { try { value ? localStorage.setItem(`wrapsheet.${key}`, value) : localStorage.removeItem(`wrapsheet.${key}`); } catch { message('Settings could not be saved.'); } };
+const getPath = path => path.split('.').reduce((o, k) => o?.[k], state);
+function setPath(path, value) { const parts = path.split('.'); let o = state; for (const p of parts.slice(0, -1)) o = o[p]; o[parts.at(-1)] = value; }
+const fmt = () => findFormat(formats, state.formatId);
+const cur = () => state.project.currency;
+const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+const shortDate = iso => iso ? new Date(iso + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '';
+function addDays(iso, days) { if (!iso) return ''; const d = new Date(iso + 'T00:00:00'); d.setDate(d.getDate() + Number(days)); return d.toLocaleDateString('en-CA'); }
+const TERMS = { due_receipt: 0, net_15: 15, net_30: 30, net_60: 60 };
+const dueFrom = (invoiceDate, preset) => preset in TERMS ? addDays(invoiceDate, TERMS[preset]) : null;
 
-  messageTimer = setTimeout(() => {
-    toast.classList.remove('is-visible', 'is-error');
-  }, 3800);
+// ---- Profile: one per device, shared by every invoice ---------------------------------------------
+function loadProfile() {
+  try { return JSON.parse(setting('profile') || setting('defaultContractor') || '{}'); } catch { return {}; }
+}
+function saveProfile(contractor) {
+  const { logo, ...rest } = contractor;
+  setSetting('profile', JSON.stringify(rest));
+  if (logo !== undefined) setSetting('profileLogo', logo);
+}
+function applyProfile(s) {
+  if (s.review) return s;                    // a crew submission keeps the sender's details
+  s.contractor = { ...s.contractor, ...loadProfile(), logo: setting('profileLogo') || s.contractor.logo || '' };
+  return s;
 }
 
-function setting(key) {
-  try { return localStorage.getItem(`wrapsheet.${key}`) || ''; } catch { return ''; }
-}
-
-function setSetting(key, value) {
-  try {
-    if (value) localStorage.setItem(`wrapsheet.${key}`, value);
-    else localStorage.removeItem(`wrapsheet.${key}`);
-  } catch {
-    message('Settings could not be saved.');
-  }
-}
-
-function setPath(path, value) {
-  const parts = path.split('.');
-  let obj = state;
-  for (const p of parts.slice(0, -1)) obj = obj[p];
-  obj[parts.at(-1)] = value;
-}
-
-function getPath(path) {
-  return path.split('.').reduce((o, k) => o?.[k], state);
-}
-
-function setSaveStatus(text, color = 'var(--muted)') {
-  const el = $('#save-status');
-  if (!el) return;
-  el.textContent = text;
-  el.style.color = color;
-}
-
+// ---- Saving ---------------------------------------------------------------------------------------
+function setSaveStatus(text, color = 'var(--muted)') { const el = $('#save-status'); if (el) { el.textContent = text; el.style.color = color; } }
 function save() {
   const snapshot = structuredClone(state), rev = ++revision;
   snapshot.updatedAt = Date.now();
-  setSaveStatus('Saving…', '#a8c3d0');
-
-  saveChain = saveChain
-    .catch(() => { })
-    .then(() => db.put('projects', snapshot))
-    .then(() => {
-      if (rev === revision) setSaveStatus('● Autosaved', 'var(--green)');
-      const i = projects.findIndex(p => p.id === snapshot.id);
-      if (i < 0) projects.push(snapshot);
-      else projects[i] = snapshot;
-      updatePicker();
-    })
-    .catch(error => {
-      setSaveStatus('Not saved', '#f07c74');
-      fail(new Error(`Could not save shoot: ${error.message}`));
-      // Do not re-throw error to avoid locking up subsequent autosaves
-    });
-
+  setSaveStatus('Saving…');
+  saveChain = saveChain.catch(() => { }).then(() => db.put('projects', snapshot)).then(() => {
+    if (rev === revision) setSaveStatus('Saved', 'var(--green)');
+    const i = projects.findIndex(p => p.id === snapshot.id);
+    if (i < 0) projects.push(snapshot); else projects[i] = snapshot;
+    updatePicker();
+  }).catch(error => { setSaveStatus('Not saved', '#f07c74'); fail(new Error(`Could not save: ${error.message}`)); });
   return saveChain;
 }
-
+const projectLabel = p => [p.project.invoiceNumber || p.project.defaultInvoiceNumber, p.project.projectTitle || 'Untitled', p.review ? '(review)' : ''].filter(Boolean).join(' · ');
 function updatePicker() {
   const picker = $('#project-picker');
-  const title = state.project.projectTitle || 'Untitled production';
-  if ($('#deck-current-title')) $('#deck-current-title').textContent = title;
-  if (!picker) return;
-  picker.innerHTML = `<option value="" disabled selected>Shoots</option>` +
-    projects.map(p => `<option value="${p.id}">${e(p.project.projectTitle || 'Untitled production')}</option>`).join('');
+  if (!picker || !state) return;
+  const sorted = [...projects].sort((a, b) => (b.project.shootEnd || '').localeCompare(a.project.shootEnd || '') || b.updatedAt - a.updatedAt);
+  picker.innerHTML = sorted.map(p => `<option value="${p.id}" ${p.id === state.id ? 'selected' : ''}>${e(projectLabel(p.id === state.id ? state : p))}</option>`).join('');
 }
 
-function updateStickyActionBar() {
-  const btn = $('#primary-action-btn');
-  if (!btn) return;
-  const isMobile = window.innerWidth <= 760;
-  if (tab === 'project') btn.textContent = isMobile ? 'Next' : 'Next: Add Work';
-  else if (tab === 'work') btn.textContent = isMobile ? 'Next' : 'Next: Add Receipts';
-  else if (tab === 'receipts') btn.textContent = isMobile ? 'Review' : 'Review Invoice';
-  else if (tab === 'invoice') btn.textContent = 'Export PDF';
+// ---- Format, period and numbering ----------------------------------------------------------------
+function invoiceNumberFromPattern() {
+  const pattern = fmt().numbering?.pattern;
+  if (pattern) state.project.invoiceNumber = fillPattern(pattern, state, fmt());
+}
+function setMonth(month) {
+  if (!/^\d{4}-\d{2}$/.test(month)) return;
+  const { start, end } = monthBounds(month);
+  Object.assign(state.project, { month, shootStart: start, shootEnd: end, invoiceDate: end });
+  const due = dueFrom(end, state.project.termsPreset); if (due) state.project.dueDate = due;
+  invoiceNumberFromPattern();
+}
+// full: switching to this format (take all its defaults). Otherwise only the rules it controls are refreshed.
+function applyFormat(format, { full = false } = {}) {
+  const p = state.project, d = format.defaults || {};
+  state.formatId = format.id;
+  for (const [k, v] of Object.entries(d)) if (k !== 'labor' && v !== undefined && (full || ['periodMode', 'taxType', 'taxRate', 'vatOnExpenses'].includes(k))) p[k] = v;
+  if (format.crew) {
+    const et = format.entityTypes?.[state.contractor.entityType] || format.entityTypes?.freelancer;
+    if (et) Object.assign(p, { taxType: et.taxType, taxRate: et.taxRate });
+  }
+  // Lines a format filled in (and nobody edited) belong to that format; swap them when the format changes.
+  if (full && state.labor.every(l => l.auto)) state.labor = (d.labor || []).map(l => ({ id: uid(), ...l, auto: true }));
+  if (full && !p.projectTitle && format.kind === 'sheet') p.projectTitle = `${format.name.replace(/\s*\(.*\)$/, '')} ${p.month || ''}`.trim();
+  if (p.periodMode === 'month') setMonth(p.month || today().slice(0, 7)); else invoiceNumberFromPattern();
+  if (format.timeZone) p.timeZone = format.timeZone;
 }
 
+// ---- Summary sidebar ------------------------------------------------------------------------------
 function summary() {
   if (!state) return;
-  const t = totals(state), c = state.project.currency;
+  const t = totals(state), c = cur(), f = fmt();
+  $('#summary-format').textContent = state.review ? `Reviewing · ${f.name}` : f.name;
+  $('#summary-name').textContent = state.project.invoiceNumber || state.project.projectTitle || 'Untitled invoice';
+  $('#labor-total').textContent = money(t.labor, c);
+  $('#expense-label').textContent = `Expenses (${t.count})`;
+  $('#expense-total').textContent = money(t.expenses, c);
+  const mode = state.project.taxType;
+  $('#tax-label').textContent = mode === 'withholding' ? `Withholding ${state.project.taxRate}%` : mode === 'none' ? 'No tax' : `VAT ${state.project.taxRate}%${state.project.vatOnExpenses ? ' (incl. expenses)' : ''}`;
+  $('#tax-total').textContent = mode === 'none' ? '—' : `${t.isWithholding ? '−' : '+'}${money(t.tax, c)}`;
+  $('#grand-total').textContent = money(t.total, c);
 
-  if ($('#summary-name')) $('#summary-name').textContent = state.project.projectTitle || 'Untitled production';
-  if ($('#labor-total')) $('#labor-total').textContent = money(t.labor, c);
-
-  const taxSign = t.isWithholding ? '−' : '+';
-  const taxLabelText = t.isWithholding ? 'Withholding tax' : 'Labor tax (VAT)';
-  if ($('#tax-label')) $('#tax-label').innerHTML = `${taxLabelText} <small id="tax-percent">(${state.project.taxRate}%)</small>`;
-  if ($('#tax-total')) $('#tax-total').textContent = t.tax > 0 ? `${taxSign}${money(t.tax, c)}` : money(0, c);
-
-  if ($('#expense-total')) $('#expense-total').textContent = money(t.expenses, c);
-  if ($('#grand-total')) $('#grand-total').textContent = money(t.total, c);
-
-  const pending = state.expenses.filter(r => !r.verified).length;
-  const statusPill = $('#receipt-status-pill');
-  if (statusPill) {
-    // Completely hide when no receipts exist to prevent empty orange box
-    if (state.expenses.length === 0) {
-      statusPill.style.display = 'none';
-      statusPill.hidden = true;
-    } else if (pending > 0) {
-      statusPill.style.display = '';
-      statusPill.hidden = false;
-      statusPill.className = 'status-indicator-pill pending';
-      statusPill.innerHTML = window.innerWidth <= 760
-        ? `<span><span class="pill-dot">●</span> ${pending} receipt${pending === 1 ? '' : 's'} →</span>`
-        : `<span><span class="pill-dot">●</span> ${pending} unverified receipt${pending === 1 ? '' : 's'}</span><span style="font-size:10px; opacity:0.8; text-transform:uppercase; letter-spacing:0.5px;">Check →</span>`;
-      statusPill.onclick = () => {
-        go('receipts');
-        setTimeout(() => {
-          const firstPending = document.querySelector('.badge:not(.verified)');
-          firstPending?.closest('.row-card')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        }, 120);
-      };
-    } else {
-      statusPill.style.display = '';
-      statusPill.hidden = false;
-      statusPill.className = 'status-indicator-pill verified';
-      statusPill.innerHTML = window.innerWidth <= 760
-        ? `<span>✓ Verified</span>`
-        : `<span>✓ All receipts verified</span>`;
-      statusPill.onclick = null;
-    }
+  const pending = state.expenses.filter(r => r.status === 'pending').length, check = state.expenses.filter(r => r.status === 'check').length;
+  const pill = $('#receipt-status-pill');
+  if (!state.expenses.length) pill.hidden = true;
+  else {
+    pill.hidden = false;
+    pill.className = `status-indicator-pill ${pending || check ? 'pending' : 'verified'}`;
+    pill.textContent = pending || check ? [pending && `${pending} to review`, check && `${check} flagged`].filter(Boolean).join(' · ') : 'All receipts reviewed';
+    pill.onclick = pending || check ? () => { filter = pending ? 'pending' : 'check'; go('receipts'); } : null;
   }
-  updateStickyActionBar();
+  const btn = $('#primary-action-btn');
+  btn.textContent = { details: 'Next: work', work: 'Next: receipts', receipts: 'Next: invoice', invoice: f.crew && !state.review ? 'Download submission .zip' : 'Download all files .zip' }[tab];
 }
 
-function field(label, path, type = 'text', extra = '') {
-  return `<label>${label}<input data-field="${path}" type="${type}" value="${e(getPath(path))}" ${extra}></label>`;
-}
-function area(label, path, extra = '') {
-  return `<label class="full">${label}<textarea data-field="${path}" ${extra}>${e(getPath(path))}</textarea></label>`;
-}
-function select(label, path, options) {
-  return `<label>${label}<select data-field="${path}">${options.map(o => {
-    const [value, title] = Array.isArray(o) ? o : [o, o];
-    return `<option value="${e(value)}" ${getPath(path) === value ? 'selected' : ''}>${e(title)}</option>`;
-  }).join('')}</select></label>`;
-}
-function panel(title, description, content, tag = '') {
-  return `<div class="panel"><div class="section-head"><div><h2>${title}</h2><p>${description}</p></div>${tag ? `<span class="tag">${tag}</span>` : ''}</div>${content}</div>`;
-}
+// ---- Form building blocks -------------------------------------------------------------------------
+const val = path => e(getPath(path) ?? '');
+const field = (label, path, type = 'text', extra = '') => `<label>${label}<input data-field="${path}" type="${type}" value="${val(path)}" ${extra}></label>`;
+const area = (label, path, extra = '') => `<label class="full">${label}<textarea data-field="${path}" ${extra}>${val(path)}</textarea></label>`;
+const select = (label, path, options, extra = '') => `<label>${label}<select data-field="${path}" ${extra}>${options.map(o => {
+  const [v, t] = Array.isArray(o) ? o : [o, o];
+  return `<option value="${e(v)}" ${String(getPath(path)) === String(v) ? 'selected' : ''}>${e(t)}</option>`;
+}).join('')}</select></label>`;
+const panel = (title, description, content, extraClass = '', action = '') => `<div class="panel ${extraClass}"><div class="section-head"><div><h2>${title}</h2>${description ? `<p>${description}</p>` : ''}</div>${action}</div>${content}</div>`;
 
-function projectView() {
-  const currentTerms = state.project.termsPreset || 'due_receipt';
-  // If contractor profile has no name, default to unlocked editing mode so users immediately know to fill it
-  const isProfileEmpty = !state.contractor.name?.trim();
-  const isLocked = !profileEditing && !isProfileEmpty;
-  const autoNumberPlaceholder = state.project.defaultInvoiceNumber || `WS-${today().replaceAll('-', '')}-001`;
-
-  return panel('Set the scene.', 'Production metadata for the final invoice.',
+// ---- 1. Details ------------------------------------------------------------------------------------
+function detailsView() {
+  const f = fmt(), p = state.project, sheet = isSheetFormat(f);
+  const userFormats = formats.filter(x => x.kind === 'sheet');
+  const formatPanel = panel('Billing format', '',
     `<div class="form-grid">
-      <div class="full">
-        <label>Project title
-          <input data-field="project.projectTitle" id="project-title-input" type="text" value="${e(getPath('project.projectTitle'))}" placeholder="e.g. Autumn Commercial — Seoul (Type shoot name here)" maxlength="200" autofocus>
-        </label>
-        ${!state.project.projectTitle ? '<p class="hint guide-hint">↑ Start here: Name your current shoot or job to begin.</p>' : ''}
-      </div>
-      ${field('Client / production company', 'project.clientName', 'text', 'placeholder="Production studio or client name" maxlength="200"')}
-      ${select('Currency', 'project.currency', [['KRW', 'KRW — Korean won'], ['USD', 'USD — US dollar'], ['EUR', 'EUR — Euro']])}
-      ${field('Invoice number', 'project.invoiceNumber', 'text', `placeholder="${e(autoNumberPlaceholder)}" maxlength="100"`)}
-      ${field('Shoot start', 'project.shootStart', 'date')}
-      ${field('Shoot end', 'project.shootEnd', 'date')}
+      <label class="full">Format
+        <select data-field="formatId">
+          <optgroup label="Built in">${BUILTIN_FORMATS.map(x => `<option value="${x.id}" ${x.id === f.id ? 'selected' : ''}>${e(x.name)}</option>`).join('')}</optgroup>
+          ${userFormats.length ? `<optgroup label="Client formats">${userFormats.map(x => `<option value="${x.id}" ${x.id === f.id ? 'selected' : ''}>${e(x.name)}</option>`).join('')}</optgroup>` : ''}
+        </select>
+      </label>
+    </div>
+    ${sheet ? `<p class="hint">Based on ${e(f.sheet.fileName)}</p>` : f.description ? `<p class="hint">${e(f.description)}</p>` : ''}
+    <div class="button-row">
+      <label class="file-button" title="Choose a past invoice from the client (.xlsx), or a .wrapformat.json file">Add a client format<input id="format-input" type="file" accept=".xlsx,.json,application/json,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"></label>
+      ${sheet ? `<button data-action="edit-format">Edit format</button>` : ''}
+    </div>
+
+    ${f.crew ? `<div class="form-grid" style="margin-top:16px">
+      ${select('You invoice as', 'contractor.entityType', Object.entries(f.entityTypes).map(([k, v]) => [k, v.label]))}
+      </div><p class="hint">${e(f.entityTypes[state.contractor.entityType]?.note || '')}</p>` : ''}`);
+
+  const periodFields = p.periodMode === 'month'
+    ? `<label>Month<input data-field="project.month" type="month" value="${e(p.month)}"></label>`
+    : `${field('Start date', 'project.shootStart', 'date')}${field('End date', 'project.shootEnd', 'date')}`;
+  const hasPattern = Boolean(f.numbering?.pattern);
+  const numberHelp = hasPattern && f.numbering.pattern.includes('{num}') ? field('Invoice sequence no.', 'project.sequence', 'number', 'min="1" max="9999" step="1"') : '';
+  const detailsPanel = panel('Invoice details', '',
+    `<div class="form-grid">
+      ${field(f.crew ? 'Production / job' : 'Project title', 'project.projectTitle', 'text', 'maxlength="200" placeholder="e.g. Solo Leveling — November"')}
+      ${sheet ? '' : field(f.crew ? 'Billed to' : 'Client', 'project.clientName', 'text', 'maxlength="200"')}
+      ${select('Billing period', 'project.periodMode', [['month', 'Calendar month'], ['range', 'Dates']])}
+      ${periodFields}
+      ${field('Invoice number', 'project.invoiceNumber', 'text', `maxlength="100" placeholder="${e(p.defaultInvoiceNumber)}"`)}
+      ${numberHelp}
       ${field('Invoice date', 'project.invoiceDate', 'date')}
-      <div class="terms-due-cell">
-        <label>Payment terms & due date
-          <div class="terms-split-row">
-            <div class="select-chevron-wrap">
-              <select id="payment-terms-preset" data-field="project.termsPreset">
-                <option value="due_receipt" ${currentTerms === 'due_receipt' ? 'selected' : ''}>Due Now</option>
-                <option value="net_15" ${currentTerms === 'net_15' ? 'selected' : ''}>Net 15</option>
-                <option value="net_30" ${currentTerms === 'net_30' ? 'selected' : ''}>Net 30</option>
-                <option value="net_60" ${currentTerms === 'net_60' ? 'selected' : ''}>Net 60</option>
-                <option value="custom" ${currentTerms === 'custom' ? 'selected' : ''}>Custom</option>
-              </select>
-            </div>
-            <input data-field="project.dueDate" type="date" value="${e(getPath('project.dueDate'))}" id="payment-due-input">
-          </div>
-        </label>
-      </div>
-      ${area('Client address', 'project.clientAddress')}
-    </div>`, 'PRODUCTION\nDETAILS') +
+      <label>Payment terms
+        <span class="split-row">
+          <select data-field="project.termsPreset">${[['due_receipt', 'Due on receipt'], ['net_15', 'Net 15'], ['net_30', 'Net 30'], ['net_60', 'Net 60'], ['custom', 'Custom date']].map(([v, t]) => `<option value="${v}" ${p.termsPreset === v ? 'selected' : ''}>${t}</option>`).join('')}</select>
+          <input data-field="project.dueDate" type="date" value="${e(p.dueDate)}" aria-label="Due date">
+        </span>
+      </label>
+      ${!sheet || f.sheet.mapping.fields.location ? field('Location / site of services', 'project.location', 'text', 'maxlength="200" placeholder="e.g. Daejeon, Chuncheon"') : ''}
+      ${sheet ? '' : select('Currency', 'project.currency', [['KRW', 'KRW'], ['USD', 'USD'], ['EUR', 'EUR']])}
+      ${sheet ? '' : area(f.crew ? 'Address of the studio' : 'Client address', 'project.clientAddress')}
+      ${sheet || f.crew ? '' : area('Notes on the invoice', 'project.notes')}
+    </div>
 
-    panel('Your Contractor Info (Saved Preset)', 'Enter your personal or company billing info once. Save it to auto-apply on future shoots.',
-      `<div class="profile-vault-card ${isLocked ? 'locked' : 'editing'}">
-        <div class="vault-top">
-          <div class="vault-status">
-            <span class="vault-icon">${isLocked ? '🔒' : '✎'}</span>
-            <strong>${isLocked ? 'Contractor Preset Active (Locked)' : 'Enter Your Billing Information'}</strong>
-          </div>
-          <button type="button" class="action-btn" data-action="${isLocked ? 'edit-profile' : 'save-profile'}">
-            ${isLocked ? '✎ Edit Info' : '✓ Lock & Save as Default'}
-          </button>
-        </div>
+    ${!state.contractor.name ? `<p class="notice">Add your name and bank details in <a data-action="open-profile">Profile</a>.</p>` : ''}`, '',
+    p.periodMode === 'month' && !state.review ? '<button data-action="next-period" title="New invoice for the following month: same client and fee, next number">Start next month →</button>' : '');
 
-        <div class="form-grid" style="margin-top:14px;">
-          ${field('Contractor / Company name', 'contractor.name', 'text', isLocked ? 'disabled' : 'placeholder="Your name or production studio"')}
-          ${field('Email', 'contractor.email', 'email', isLocked ? 'disabled' : 'placeholder="billing@example.com"')}
-          ${field('Phone', 'contractor.phone', 'tel', isLocked ? 'disabled' : 'placeholder="+82 10-0000-0000"')}
-          ${field('Business registration / Tax ID', 'contractor.taxId', 'text', isLocked ? 'disabled' : 'placeholder="Registration or Tax ID (or n/a)"')}
-          ${area('Business Address', 'contractor.address', isLocked ? 'disabled' : 'placeholder="Street, City, Country"')}
-          ${field('Bank Name', 'contractor.bankName', 'text', isLocked ? 'disabled' : 'placeholder="e.g. Shinhan Bank / Wells Fargo"')}
-          ${field('Account Number', 'contractor.accountNumber', 'text', isLocked ? 'disabled' : 'placeholder="Account or IBAN"')}
-          ${area('Payment Terms / Instructions', 'contractor.paymentTerms', isLocked ? 'disabled' : 'placeholder="e.g. Payment due within 15 days of invoice."')}
-        </div>
-      </div>`, 'CONTRACTOR\nINFO');
+  return formatPanel + detailsPanel;
 }
 
-// Unified work presets: Merged Kit/Equipment & added Retainer / Flat Fee / Weekly options
-const laborTypes = [
-  'Shoot Day',
-  'Prep Day',
-  'Travel Day',
-  'Half Day',
-  'Overtime',
-  'Monthly Retainer',
-  'Weekly Rate',
-  'Project Buyout / Flat Fee',
-  'Kit & Equipment Rental',
-  'Assistant',
-  'Post-production',
-  'Other'
-];
-
+// ---- 2. Work --------------------------------------------------------------------------------------
+const laborTypes = ['Shoot day', 'Prep day', 'Travel day', 'Half day', 'Overtime (hours)', 'Monthly fee', 'Weekly rate', 'Flat fee', 'Kit & equipment rental', 'Assistant', 'Post-production', 'Other'];
 function workView() {
-  const rateStep = state.project.currency === 'KRW' ? '1000' : 'any';
-  const taxMode = state.project.taxType || 'vat';
-
-  return panel('Every hour. Every piece of kit.', 'Build your agreed day rates, equipment fees, or monthly retainers.',
-    `<div class="inline-action-row">
-      <label>Add a rate or retainer
-        <select id="labor-kind">${laborTypes.map(t => `<option>${t}</option>`).join('')}</select>
-      </label>
-      <button class="primary" data-action="add-labor">＋ Add item</button>
-    </div>
-    ${state.labor.length ? state.labor.map((r, i) => `
+  const step = cur() === 'KRW' ? '1000' : 'any', f = fmt(), mode = state.project.taxType;
+  const rows = state.labor.length ? state.labor.map((r, i) => `
       <div class="row-card">
         <div class="row-top">
-          <strong>${String(i + 1).padStart(2, '0')} / <span data-row-total="${i}">${money(round(r.rate * r.quantity, state.project.currency), state.project.currency)}</span></strong>
+          <strong>${String(i + 1).padStart(2, '0')} · <span data-row-total="${i}">${money(round(r.rate * r.quantity, cur()), cur())}</span></strong>
           <button class="remove" data-action="remove-labor" data-id="${r.id}">Remove</button>
         </div>
         <div class="form-grid">
           ${field('Description', `labor.${i}.description`)}
-          ${field('Work date / Period', `labor.${i}.date`, 'date')}
-          ${select('Unit', `labor.${i}.unit`, ['day', 'month', 'week', 'flat', 'hour', 'item', 'km', 'mile'])}
+          ${state.project.periodMode === 'month' ? '' : field('Date', `labor.${i}.date`, 'date')}
+          ${select('Unit', `labor.${i}.unit`, ['day', 'hour', 'week', 'month', 'flat', 'item', 'km'])}
           ${field('Quantity', `labor.${i}.quantity`, 'number', 'min="0" max="1000000" step="0.5"')}
-          ${field(`Rate (${state.project.currency})`, `labor.${i}.rate`, 'number', `min="0" max="1000000000000" step="${rateStep}"`)}
+          ${field(`Rate (${cur()})`, `labor.${i}.rate`, 'number', `min="0" step="${step}"`)}
         </div>
-        <label class="check-pill">
-          <input type="checkbox" data-field="labor.${i}.taxable" ${r.taxable ? 'checked' : ''}>
-          <span>Taxable item</span>
-        </label>
-      </div>`).join('') : '<div class="empty" style="padding:20px 0; color:var(--muted);">No rates or retainers logged yet. Add your first item above.</div>'}
-    
-    <!-- Tax Configuration Section with Model Switch -->
-    <div class="form-grid" style="margin-top:24px; padding-top:18px; border-top:1px solid var(--line);">
-      ${select('Tax Calculation Mode', 'project.taxType', [
-      ['vat', 'VAT / Sales Tax (+ Added to Total)'],
-      ['withholding', 'Withholding Tax / 원천징수 (− Deducted from Payout)']
-    ])}
-      ${field(taxMode === 'withholding' ? 'Withholding Rate (%) — e.g. 3.3' : 'VAT Rate (%) — e.g. 10', 'project.taxRate', 'number', `min="0" max="100" step="0.1" placeholder="${taxMode === 'withholding' ? '3.3' : '10'}"`)}
-    </div>`, 'WORK\nLOG');
-}
-
-function receiptView() {
-  const hasApiKey = Boolean(setting('apiKey'));
-  const amountStep = state.project.currency === 'KRW' ? '1000' : 'any';
-
-  return panel('Proof, without the paperwork.', 'Upload slips as you get them. Only verified receipts enter the invoice.',
-    `${!hasApiKey ? `<div class="ocr-notice-bar">
-      <span>ℹ Instant OCR requires a free Google AI key. Set it up once in <a data-action="open-settings">API & Setup ⚙</a></span>
-    </div>` : ''}
-    <div class="upload-box" id="receipt-dropzone">
-      <svg class="box-icon" viewBox="0 0 24 24">
-        <path d="M19 2H5c-1.1 0-2 .9-2 2v17l3-1.5 3 1.5 3-1.5 3 1.5 3-1.5 3 1.5V4c0-1.1-.9-2-2-2zm0 15.8l-1-.5-3 1.5-3-1.5-3 1.5-3-1.5-1 .5V4h14v13.8zM7 7h10v2H7zm0 4h10v2H7zm0 4h7v2H7z"/>
-      </svg>
-      <h3>Drop the admin. Keep the receipt.</h3>
-      <p>Supports Hi-Pass tolls, parking, and catering slips</p>
-
-      ${uploadProgress.active ? `
-        <div style="margin-top: 14px;">
-          <span class="upload-progress-badge">
-            <span class="badge-dot" style="background:#fff;"></span>
-            Processing receipt ${uploadProgress.current} of ${uploadProgress.total} with Gemini 2.5 Flash…
-          </span>
-        </div>
-      ` : ''}
-
-      <div class="file-actions-grid">
-        <label class="file-button">
-          <svg class="btn-icon" viewBox="0 0 24 24"><path d="M12 15.2a3.2 3.2 0 100-6.4 3.2 3.2 0 000 6.4z"/><path d="M9 2L7.17 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2h-3.17L15 2H9zm3 15c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5z"/></svg>
-          SCAN WITH CAMERA
-          <input id="camera-input" type="file" accept="image/*" capture="environment">
-        </label>
-        <label class="file-button">
-          <svg class="btn-icon" viewBox="0 0 24 24"><path d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM14 13v4h-4v-4H7l5-5 5 5h-3z"/></svg>
-          UPLOAD FILES
-          <input id="receipt-input" type="file" accept="image/*" multiple>
-        </label>
-        <button data-action="manual-receipt">
-          <svg class="btn-icon" viewBox="0 0 24 24"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
-          MANUAL ENTRY
-        </button>
-      </div>
+        ${mode === 'none' ? '' : `<label class="check-pill"><input type="checkbox" data-field="labor.${i}.taxable" ${r.taxable ? 'checked' : ''}><span>${mode === 'withholding' ? 'Withholding applies' : 'VAT applies'}</span></label>`}
+      </div>`).join('') : '<p class="empty">No work lines yet.</p>';
+  const taxLocked = f.crew;
+  return panel('Work', state.project.periodMode === 'month' ? 'Fees for this billing period.' : 'Day rates, fees and kit for this job.',
+    `<div class="inline-action-row">
+      <label>Add a line<select id="labor-kind">${laborTypes.map(t => `<option>${t}</option>`).join('')}</select></label>
+      <button class="primary" data-action="add-labor">Add</button>
     </div>
-    <div class="actions" style="margin: 16px 0 8px;">
-      <span class="hint">${state.expenses.length} receipts logged · Tap thumbnail to inspect proof & swipe</span>
-    </div>
-    ${state.expenses.map((r, i) => `
-      <div class="row-card">
-        <div class="row-top">
-          <span class="badge ${r.verified ? 'verified' : ''}">${r.verified ? '✓ VERIFIED' : '○ PENDING REVIEW'} · ${String(i + 1).padStart(2, '0')}</span>
-          <button class="remove" data-action="remove-receipt" data-id="${r.id}">Remove</button>
-        </div>
-        <div class="receipt-card">
-          <div>
-            ${images.get(r.receiptId) ? `<img class="receipt-image" src="${e(images.get(r.receiptId).imageThumbnail)}" alt="Receipt" data-inspect-id="${r.id}" style="cursor:pointer;" title="Tap to inspect">` : '<div class="empty" style="padding:18px 0; text-align:center; font-size:11px; color:var(--muted); background:#101213; border-radius:8px;">Manual</div>'}
-          </div>
-          <div>
-            <div class="form-grid">
-              ${field('Vendor / 거래처', `expenses.${i}.vendor`)}
-              ${field('Date / 날짜', `expenses.${i}.date`, 'date')}
-              ${field('Total paid / 합계', `expenses.${i}.total`, 'number', `min="0" step="${amountStep}"`)}
-              ${field('Included VAT / 부가세', `expenses.${i}.vat`, 'number', `min="0" step="${amountStep}"`)}
-              ${field('Category', `expenses.${i}.category`)}
-              ${select('Currency', `expenses.${i}.currency`, [['', 'Choose'], ['KRW', 'KRW'], ['USD', 'USD'], ['EUR', 'EUR']])}
-            </div>
-            ${r.warning ? `<p class="notice" style="color:#dcb378; font-size:11px; margin-top:8px;">${e(r.warning)}</p>` : ''}
-            <div class="actions" style="margin-top: 18px;">
-              ${!r.verified
-        ? `<button class="primary" data-action="confirm-receipt" data-id="${r.id}">Confirm expense</button>`
-        : `<button class="action-btn" data-action="unconfirm-receipt" data-id="${r.id}">Edit expense</button>`
-      }
-              ${r.receiptId && !r.verified
-        ? `<button class="action-btn" data-action="scan" data-id="${r.id}" ${scanBusy ? 'disabled' : ''}>${scanBusy ? 'Scanning…' : 'Re-scan OCR'}</button>`
-        : ''
-      }
-            </div>
-          </div>
-        </div>
-      </div>`).join('')}`, 'RECEIPTS\nPROOF');
-}
-
-function invoiceView() {
-  const currentAccent = state.invoice.accent || '#a8c3d0';
-  const showGallery = state.invoice.options?.showReceiptGallery !== false;
-
-  return (
-    panel('Invoice Style & Palette', 'Choose an editorial layout and cinema-accent color.',
+    ${rows}`) +
+    panel('Tax', taxLocked ? 'Set by how you invoice (Details tab).' : '',
       `<div class="form-grid">
-        <div class="select-chevron-wrap full">
-          <label>Layout Preset
-            <select data-field="invoice.templateId" class="preset-dropdown">
-              ${presets.map(p => `<option value="${p.id}" ${state.invoice.templateId === p.id ? 'selected' : ''}>${e(p.name)}</option>`).join('')}
-              ${templates.map(t => `<option value="${t.id}" ${state.invoice.templateId === t.id ? 'selected' : ''}>${e(t.name)} (Custom)</option>`).join('')}
-            </select>
-          </label>
-        </div>
-        <div class="full" style="margin-top: 6px;">
-          <label>Cinema Accent Grade</label>
-          <div class="swatch-group">
-            ${SWATCHES.map(s => `
-              <button type="button" class="swatch-btn ${currentAccent.toLowerCase() === s.color ? 'active' : ''}" 
-                      style="background: ${s.color}" data-set-color="${s.color}" title="${s.name} (${s.desc})"></button>
-            `).join('')}
-          </div>
-        </div>
-      </div>`, 'LAYOUT\nARCHETYPE') +
-
-    panel('Export Options & Storage', 'Manage PDF options, branding, and local shoot storage.',
-      `<div class="invoice-options-deck">
-        <label class="check-pill full">
-          <input type="checkbox" data-field="invoice.options.showReceiptGallery" ${showGallery ? 'checked' : ''}>
-          <span>Attach receipt proof gallery to PDF</span>
-        </label>
-
-        <div class="deck-row">
-          <label class="file-button deck-btn">
-            <svg class="btn-icon" viewBox="0 0 24 24"><path d="M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z"/></svg>
-            ${state.contractor.logo ? 'Change Logo' : 'Upload Logo'}
-            <input type="file" id="logo-input" accept="image/*">
-          </label>
-          ${state.contractor.logo ? '<button class="action-btn" data-action="remove-logo">Remove Logo</button>' : ''}
-
-          <label class="file-button deck-btn">
-            <svg class="btn-icon" viewBox="0 0 24 24"><path d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z"/></svg>
-            Upload HTML
-            <input type="file" id="template-input" accept=".html,text/html">
-          </label>
-        </div>
-
-        <section class="personal-template-card">
-          <div><span class="eyebrow">YOUR OWN FORMAT</span><h3>Bring your invoice.</h3><p>Upload a blank PDF. Review detected fields once, then reuse its layout across projects.</p></div>
-          <div class="deck-row"><label class="file-button deck-btn">Upload PDF template<input type="file" id="pdf-template-input" accept=".pdf,application/pdf"></label>
-          ${template()?.pdf ? '<button data-action="edit-pdf-template">Edit field mapping</button>' : ''}</div>
-          <p class="hint">Your saved PDF templates appear in Layout Preset. Built-in WrapSheet styles and Upload HTML still work as before. PDF values are edited in Project, Work, and Receipts.</p>
-        </section>
-        <details style="margin-top: 18px;">
-          <summary style="cursor:pointer; font-size:12px; font-weight:600; color:var(--accent);">Customize Document Section Headings ▾</summary>
-          <div class="form-grid" style="margin-top:12px;">
-            ${Object.keys(state.invoice.labels).map(k => field(k.replace(/([A-Z])/g, ' $1'), `invoice.labels.${k}`)).join('')}
-          </div>
-        </details>
+        ${select('Tax', 'project.taxType', [['vat', 'VAT added to the total'], ['withholding', 'Withholding deducted (원천징수)'], ['none', 'No tax']], taxLocked ? 'disabled' : '')}
+        ${mode === 'none' ? '' : field('Rate (%)', 'project.taxRate', 'number', `min="0" max="100" step="0.1" ${taxLocked ? 'disabled' : ''}`)}
       </div>
+      ${mode === 'vat' ? `<label class="check-pill"><input type="checkbox" data-field="project.vatOnExpenses" ${state.project.vatOnExpenses ? 'checked' : ''} ${taxLocked ? 'disabled' : ''}><span>Also charge VAT on reimbursed expenses</span></label>` : ''}
+`);
+}
 
-      <!-- Balanced 2x2 Equalized Action Button Grid -->
-      <div class="actions invoice-action-bar">
-        <button class="primary" data-action="export">
-          <svg class="btn-icon" viewBox="0 0 24 24"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>
-          Export PDF
-        </button>
-        <button data-action="copy-summary">
-          <svg class="btn-icon" viewBox="0 0 24 24"><path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg>
-          Copy Summary
-        </button>
-        <button data-action="clone-project">
-          <svg class="btn-icon" viewBox="0 0 24 24"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
-          ＋ Duplicate
-        </button>
-        <button class="danger-btn" data-action="delete-project">
-          <svg class="btn-icon" viewBox="0 0 24 24"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
-          Delete Shoot
-        </button>
-      </div>
-      <p id="export-status" role="status" class="hint"></p>`, 'DOCUMENT\nACTIONS') +
+// ---- 3. Receipts ---------------------------------------------------------------------------------
+const sortedExpenses = () => state.expenses.map((r, i) => ({ r, i })).sort((a, b) => byDateTime(a.r, b.r));
+const shootSuggestions = r => suggestShootDays(events, r.date, r.time, fmt().returnLabel || 'return');
 
-    `<!-- Proportional Scaled Viewport -->
-    <div class="preview-prompt-bar">
-      <span>Live Preview</span>
-      <span class="edit-zoom-pill" id="open-zoom-modal">🔍 Edit & Zoom</span>
+function statusButtons(r) {
+  const b = (status, label, cls = '') => `<button class="${cls}" data-action="set-status" data-id="${r.id}" data-value="${status}">${label}</button>`;
+  if (r.status === 'pending') return b('verified', 'Looks right', 'primary') + b('check', 'Flag') + b('excluded', "Don't bill");
+  if (r.status === 'check') return b('verified', 'Looks right', 'primary') + b('excluded', "Don't bill") + b('pending', 'Edit');
+  if (r.status === 'excluded') return b('pending', 'Bring back');
+  return b('pending', 'Edit') + b('check', 'Flag');
+}
+
+function receiptCard(r, i, names) {
+  const img = r.receiptId ? images.get(r.receiptId) : null;
+  const suggestions = shootSuggestions(r);
+  const noShoot = events.length && r.date && !suggestions.length;
+  const locked = r.status === 'verified' || r.status === 'excluded';
+  const dis = locked ? 'disabled' : '';
+  const fileName = r.receiptId ? (names.get(r.receiptId) || img?.name || '') : '';
+  return `
+  <div class="row-card receipt-row status-${r.status}" id="exp-${r.id}">
+    <div class="row-top">
+      <span class="badge status-${r.status}">${STATUS[r.status]}</span>
+      <span class="row-meta">${e(r.date ? shortDate(r.date) : 'No date')}${r.time ? ` ${e(r.time)}` : ''} · ${e(r.category || 'No category')} · ${money(Number(r.total) || 0, cur())}</span>
+      <button class="remove" data-action="remove-receipt" data-id="${r.id}">Delete</button>
     </div>
-    <div class="preview-viewport-box" id="scaler-viewport" role="button" tabindex="0" aria-label="Expand invoice and edit">
-      <div class="preview-scaler-stage" id="scaler-stage">
-        <div id="invoice-preview" class="invoice-paper"></div>
+    <div class="receipt-card">
+      <div class="thumb-col">
+        ${img ? `<img class="receipt-image" src="${e(img.imageThumbnail)}" alt="Receipt" data-inspect-id="${r.id}" title="Open full size">` : '<div class="thumb-empty">No file</div>'}
+        ${fileName && isBillable(r) ? `<small class="file-name" title="File name in the receipts folder">${e(fileName)}</small>` : ''}
+      </div>
+      <div>
+        <div class="form-grid three">
+          ${field('Date', `expenses.${i}.date`, 'date', dis)}
+          ${field('Time', `expenses.${i}.time`, 'time', dis)}
+          ${field(`Amount (${cur()})`, `expenses.${i}.total`, 'number', `min="0" step="any" ${dis}`)}
+          ${field('Vendor', `expenses.${i}.vendor`, 'text', dis)}
+          <label>Category<input data-field="expenses.${i}.category" list="category-list" value="${e(r.category)}" ${dis}></label>
+          <label>Paid by<input data-field="expenses.${i}.paidBy" list="card-list" value="${e(r.paidBy)}" placeholder="e.g. 현대카드 2608" ${dis}></label>
+          ${field('Location', `expenses.${i}.location`, 'text', dis)}
+          <label>Shoot day<input data-field="expenses.${i}.shootDay" list="sd-${r.id}" value="${e(r.shootDay)}" ${dis}>
+            <datalist id="sd-${r.id}">${suggestions.map(s => `<option value="${e(s.label)}">`).join('')}</datalist></label>
+          ${field('Notes', `expenses.${i}.notes`, 'text', `${dis} placeholder="${r.status === 'check' ? 'What needs confirming?' : ''}"`)}
+        </div>
+        ${!r.shootDay && suggestions.length && !locked ? `<div class="chip-row">${suggestions.map(s => `<button class="chip" data-action="apply-shootday" data-id="${r.id}" data-value="${e(s.label)}">${e(s.label)}</button>`).join('')}</div>` : ''}
+        ${noShoot ? `<p class="notice">No shoot on this date.</p>` : ''}
+        ${r.warning ? `<p class="notice">${e(r.warning)}</p>` : ''}
+        ${state.review ? reviewLine(r) : ''}
+        <div class="actions">${statusButtons(r)}${r.receiptId && !locked && setting('apiKey') ? `<button data-action="scan" data-id="${r.id}">Re-read</button>` : ''}</div>
       </div>
     </div>
+  </div>`;
+}
 
-    <!-- Natural Size Scrollable Edit Modal -->
-    <dialog id="invoice-zoom-modal">
-      <div class="zoom-modal-header">
-        <span>${template()?.pdf ? 'Edit values in Project, Work and Receipts; adjust positions with Edit field mapping.' : 'Tap any dashed outline to edit directly'}</span>
-        <button type="button" id="close-zoom-modal" class="primary">Done</button>
+function tollPanel(trips) {
+  if (!trips.length) return '';
+  const chain = checkBalanceChain(trips.map(({ r }) => ({ date: r.date, time: r.time, amount: Number(r.total), balanceAfter: r.balanceAfter === '' ? '' : Number(r.balanceAfter) })));
+  const billable = trips.filter(({ r }) => isBillable(r));
+  const sum = billable.reduce((n, { r }) => n + Number(r.total || 0), 0);
+  const notShoot = trips.filter(({ r }) => events.length && !shootSuggestions(r).length);
+  const rows = trips.map(({ r, i }) => {
+    const sugg = shootSuggestions(r);
+    return `<tr class="status-${r.status}">
+      <td>${e(r.date)} ${e(r.time)}</td>
+      <td>${e(r.route || r.vendor)}</td>
+      <td class="num">${money(Number(r.total) || 0, cur())}</td>
+      <td class="num">${r.balanceAfter === '' ? '—' : Number(r.balanceAfter).toLocaleString()}</td>
+      <td><input data-field="expenses.${i}.shootDay" list="sd-${r.id}" value="${e(r.shootDay)}" placeholder="${events.length && !sugg.length ? 'No shoot' : ''}" aria-label="Shoot day"><datalist id="sd-${r.id}">${sugg.map(s => `<option value="${e(s.label)}">`).join('')}</datalist></td>
+      <td><select data-action-change="set-status" data-id="${r.id}" aria-label="Status">${['pending', 'verified', 'check', 'excluded'].map(s => `<option value="${s}" ${r.status === s ? 'selected' : ''}>${STATUS[s]}</option>`).join('')}</select></td>
+    </tr>`;
+  }).join('');
+  const notes = chain.notes.map(n => n.kind === 'topup'
+    ? `<li>Top-up of ${money(n.amount, cur())} before ${e(n.at.date)} ${e(n.at.time)}.</li>`
+    : `<li class="warn">Balance does not continue between ${e(n.after.date)} ${e(n.after.time)} and ${e(n.at.date)} ${e(n.at.time)} (${money(-n.amount, cur())} unaccounted). A trip is missing here, or this is one you excluded.</li>`).join('');
+  return panel('Hi-pass statement', `${plural(trips.length, 'trip')} · ${plural(billable.length, 'billed trip')} · ${money(sum, cur())}`,
+    `<div class="table-scroll"><table class="data-table"><thead><tr><th>Date</th><th>Route</th><th class="num">Toll</th><th class="num">Balance after</th><th>Shoot day</th><th>Status</th></tr></thead><tbody>${rows}</tbody></table></div>
+    <div class="check-block ${chain.ok ? 'ok' : 'warn'}">
+      <strong>${chain.checked < 2 ? 'Balance check: not enough balances read.' : chain.ok ? 'Balance check: the balance column continues without gaps.' : 'Balance check: gaps found.'}</strong>
+      ${notes ? `<ul>${notes}</ul>` : ''}
+      ${notShoot.length ? `<p>${plural(notShoot.length, 'trip')} on days with no shoot in your calendar: ${notShoot.map(({ r }) => e(r.date)).filter((d, k, a) => a.indexOf(d) === k).join(', ')}. To leave them out, untick them on the Hi-pass site, print again and import the new statement.</p>` : ''}
+    </div>
+    <div class="button-row">
+      <button data-action="verify-toll-shootdays">Approve shoot days</button>
+      <button data-action="verify-toll-all">Approve all</button>
+      <button class="remove" data-action="remove-toll">Remove</button>
+    </div>`);
+}
+
+function receiptsView() {
+  const f = fmt(), hasKey = Boolean(setting('apiKey'));
+  const all = sortedExpenses(), counts = Object.fromEntries(Object.keys(STATUS).map(k => [k, all.filter(x => x.r.status === k).length]));
+  const tolls = all.filter(x => x.r.source === 'hipass');
+  const others = all.filter(x => x.r.source !== 'hipass' && (filter === 'all' || x.r.status === filter));
+  const t = totals(state);
+  const periodEvents = eventsInRange(events, state.project.shootStart, state.project.shootEnd);
+  const names = receiptFileNames(state, f);
+  const cards = (state.expenses.length ? others.map(({ r, i }) => receiptCard(r, i, names)).join('') : '') ||
+    `<p class="empty">${state.expenses.length ? 'Nothing in this view.' : 'No receipts yet.'}</p>`;
+  const cats = Object.entries(t.categories).map(([k, v]) => `${e(k)} ${v.count} · ${money(v.total, cur())}`).join('<span class="sep">|</span>');
+  const usedCards = [...new Set(projects.flatMap(p => p.expenses.map(r => r.paidBy)).concat(state.expenses.map(r => r.paidBy)).filter(Boolean))];
+
+  return panel('Receipts', 'Mark each receipt. "Looks right" and "Flag" put it on the invoice; "To review" and "Don\'t bill" leave it off.',
+    `${hasKey ? '' : `<p class="notice">Add a Gemini key in <a data-action="open-settings">Settings</a> to read receipts automatically.</p>`}
+    <div class="upload-box" id="receipt-dropzone">
+      <div class="button-row">
+        <label class="file-button primary">Upload receipts<input id="receipt-input" type="file" accept="image/*,application/pdf,.pdf" multiple></label>
+        <label class="file-button mobile-only">Take photo<input id="camera-input" type="file" accept="image/*" capture="environment"></label>
+        <button data-action="manual-receipt">Add by hand</button>
+        <span class="hint inline">Receipts and Hi-pass statements · PDF or photo · or drop files here</span>
       </div>
-      <div class="zoom-modal-body" id="invoice-modal-backdrop">
-        <div id="invoice-modal-content" class="invoice-paper"></div>
+    </div>
+    <div class="calendar-line">
+      <span>${events.length ? `Shoot calendar: ${plural(periodEvents.length, 'shoot day')} this period` : 'Upload your shoot calendar (.ics) to check expenses against shoot days.'}</span>
+      <label class="file-button small">${events.length ? 'Update calendar' : 'Upload calendar'}<input id="ics-input" type="file" accept=".ics,text/calendar,.zip"></label>
+      ${events.length ? `<button class="small" data-action="clear-calendar">Remove</button>` : ''}
+    </div>
+    <datalist id="category-list">${f.categories.map(c => `<option value="${e(c)}">`).join('')}</datalist>
+    <datalist id="card-list">${usedCards.map(c => `<option value="${e(c)}">`).join('')}</datalist>`) +
+    tollPanel(tolls) +
+    `<div class="panel">
+      <div class="filter-row">
+        ${[['all', 'All', all.length - tolls.length], ...Object.entries(STATUS).map(([k, v]) => [k, v, all.filter(x => x.r.source !== 'hipass' && x.r.status === k).length])]
+      .map(([k, label, n]) => `<button class="chip ${filter === k ? 'active' : ''}" data-action="filter" data-value="${k}">${label} <span>${n}</span></button>`).join('')}
       </div>
-    </dialog>`
-  );
+      ${cats ? `<p class="category-line">${cats}</p>` : ''}
+      ${cards}
+    </div>`;
 }
 
-function enrichedState() {
-  const effectiveInvoiceNumber = state.project.invoiceNumber?.trim()
-    || state.project.defaultInvoiceNumber
-    || 'WrapSheet';
+// ---- 4. Invoice -----------------------------------------------------------------------------------
+function invoiceView() {
+  const f = fmt(), sheet = isSheetFormat(f), p = state.project, t = totals(state);
+  const issues = checklist(state, f, { hasFile: id => images.has(id) });
+  const blocks = issues.filter(i => i.level === 'block');
+  const crewSubmit = f.crew && !state.review;
+  const btn = (action, label, ext, primary = false, extra = '') => `<button class="${primary ? 'primary ' : ''}dl-btn" data-action="${action}" ${extra}>${label ? `${label} ` : ''}<span class="ext">${ext}</span></button>`;
+  const deliver = sheet
+    ? btn('download-all', 'All files', '.zip', true) + btn('download-xlsx', '', '.xlsx') + btn('download-pdf', '', '.pdf') +
+      btn('download-receipts', 'Receipts', '.zip') + btn('download-log', 'Expense log', '.csv') + `<button data-action="copy-rows">Copy expense rows</button>`
+    : crewSubmit
+      ? btn('download-package', 'Submission', '.zip', true, blocks.length ? 'disabled' : '') + btn('download-pdf', '', '.pdf') + btn('download-receipts', 'Receipts', '.zip')
+      : btn('download-all', 'All files', '.zip', true) + btn('download-pdf', '', '.pdf') + btn('download-receipts', 'Receipts', '.zip') + btn('download-log', 'Expense log', '.csv');
+  const names = fileNames(state, f);
+  const issueList = issues.length ? `<ul class="issue-list">${issues.map(i => `<li class="${i.level}">${e(i.text)}</li>`).join('')}</ul>` : '<p class="ok-line">Everything is reviewed and ready.</p>';
 
-  return {
-    ...state,
-    project: {
-      ...state.project,
-      invoiceNumber: effectiveInvoiceNumber
-    },
-    expenses: state.expenses.map(r => ({
-      ...r,
-      imageThumbnail: images.get(r.receiptId)?.imageThumbnail || ''
-    }))
-  };
+  const reviewPanel = state.review ? reviewPanelHTML() : '';
+  const deliverPanel = panel(crewSubmit ? 'Submit to arki pictures' : 'Deliverables', crewSubmit
+    ? 'Send the .zip to arki pictures by email or Drive.'
+    : `Files: ${e(sheet ? names.xlsx + ', ' : '')}${e(names.pdf)}, ${e(names.folder)}/ receipts, ${e(names.log)}.`,
+    `${issueList}<div class="deliver-grid">${deliver}</div>
+    ${sheet ? `<p class="hint">Pasting into Google Sheets: click the first expense row, press ⌘⇧V, then check the totals.</p>` : ''}`);
+
+  const taxPanel = (f.taxInvoice?.enabled !== false && sheet && p.taxType === 'vat') ? taxInvoicePanel(t) : '';
+  const stylePanel = sheet ? '' : `<details class="panel style-panel"><summary>Invoice style</summary>
+      <div class="form-grid" style="margin-top:16px">
+        ${select('Layout', 'invoice.templateId', presets.map(x => [x.id, x.name]))}
+        <label>Accent<span class="swatch-group">${['#a8c3d0', '#d4a373', '#9aa899', '#c97a7e', '#c8c8c4'].map(c => `<button type="button" class="swatch-btn ${state.invoice.accent === c ? 'active' : ''}" style="background:${c}" data-set-color="${c}" aria-label="Accent ${c}"></button>`).join('')}</span></label>
+      </div>
+      <label class="check-pill"><input type="checkbox" data-field="invoice.options.showReceiptGallery" ${state.invoice.options.showReceiptGallery ? 'checked' : ''}><span>Add receipt images to the PDF</span></label>
+      <label class="check-pill"><input type="checkbox" data-field="invoice.options.showBankInfo" ${state.invoice.options.showBankInfo ? 'checked' : ''}><span>Show bank details</span></label>
+
+    </details>`;
+  const previewBlock = `<div class="panel preview-panel">
+      <div class="section-head"><div><h2>Preview</h2></div><button data-action="open-preview">Full size</button></div>
+      <div class="preview-viewport-box" id="scaler-viewport"><div class="preview-scaler-stage" id="scaler-stage"><div id="invoice-preview"></div></div></div>
+    </div>`;
+  return reviewPanel + deliverPanel + previewBlock + taxPanel + stylePanel;
 }
 
-function template() {
-  return templates.find(t => t.id === state.invoice.templateId) || presets.find(t => t.id === state.invoice.templateId) || presets[0];
+function taxInvoicePanel(t) {
+  const f = fmt(), p = state.project, c = cur();
+  const items = f.taxInvoice?.items || ['{labor} ({yyyy}.{mm})', 'Reimbursed Expenses ({yyyy}.{mm})'];
+  const rows = [[fillPattern(items[0], state, f), t.labor, t.laborTax]];
+  if (p.vatOnExpenses && t.expenses) rows.push([fillPattern(items[1] || 'Reimbursed Expenses', state, f), t.expenses, t.expenseTax]);
+  const deadline = taxInvoiceDeadline(p.shootEnd || p.invoiceDate);
+  const daysLeft = Math.round((new Date(deadline + 'T23:59:00') - new Date()) / 86400000);
+  const cell = (shown, value) => `<button class="copy-cell" data-action="copy-text" data-value="${e(value)}" title="Click to copy">${e(shown)}</button>`;
+  return panel('Tax invoice (Hometax)', `Issue after approval · dated ${e(p.invoiceDate)} · deadline ${e(deadline)}${daysLeft >= 0 ? ` (${plural(daysLeft, 'day')} left)` : ' (passed)'}`,
+    `<div class="table-scroll"><table class="data-table"><thead><tr><th>Item</th><th class="num">Supply amount</th><th class="num">VAT</th></tr></thead><tbody>
+      ${rows.map(([item, supply, vat]) => `<tr><td>${cell(item, item)}</td><td class="num">${cell(money(supply, c), supply)}</td><td class="num">${cell(money(vat, c), vat)}</td></tr>`).join('')}
+    </tbody></table></div>
+    ${f.taxInvoice?.note ? `<p class="hint pre">${e(f.taxInvoice.note)}</p>` : ''}
+    <p class="hint">Click a value to copy it. Amount changed after issuing? Issue a 수정세금계산서.</p>`);
 }
 
+// ---- Review mode (arki checking a crew submission) ---------------------------------------------
+function reviewLine(r) {
+  return `<div class="review-line"><span>Review:</span>
+    <button class="chip ${r.reviewStatus === 'ok' ? 'active' : ''}" data-action="review-mark" data-id="${r.id}" data-value="ok">OK</button>
+    <button class="chip ${r.reviewStatus === 'query' ? 'active warn' : ''}" data-action="review-mark" data-id="${r.id}" data-value="query">Query</button>
+    <input data-review-note="${r.id}" value="${e(r.reviewNote || '')}" placeholder="Question for the crew member"></div>`;
+}
+function reviewPanelHTML() {
+  const t = totals(state), cl = state.review.claimed || {}, c = cur();
+  const row = (label, claimed, actual) => `<tr><td>${label}</td><td class="num">${money(claimed ?? 0, c)}</td><td class="num">${money(actual, c)}</td><td>${Math.abs((claimed ?? 0) - actual) < 1 ? '✓' : '<strong class="warn">Differs</strong>'}</td></tr>`;
+  const queries = state.expenses.filter(r => r.reviewStatus === 'query').length, oks = state.expenses.filter(r => r.reviewStatus === 'ok').length;
+  return panel(`Reviewing ${e(state.contractor.name || 'submission')}`, `Imported ${e(state.review.importedAt.slice(0, 10))} from ${e(state.review.fileName)}. ${plural(oks, 'line')} OK, ${queries} ${queries === 1 ? 'query' : 'queries'}.`,
+    `<div class="table-scroll"><table class="data-table"><thead><tr><th></th><th class="num">Claimed</th><th class="num">Recalculated</th><th></th></tr></thead><tbody>
+      ${row('Work', cl.labor, t.labor)}${row('Expenses', cl.expenses, t.expenses)}${row('Tax', cl.tax, t.tax)}${row('Total', cl.total, t.total)}
+    </tbody></table></div>
+    <p class="hint">${e(state.contractor.role || '')} · ${e(fmt().entityTypes?.[state.contractor.entityType]?.label || '')} · Business no. ${e(state.contractor.taxId || '—')} · ${e(state.contractor.bankName)} ${e(state.contractor.accountNumber)} (${e(state.contractor.accountHolder || '')})</p>
+    <label class="full">Note to the crew member<textarea data-field="review.note">${e(state.review.note || '')}</textarea></label>
+    <div class="button-row"><button class="primary" data-action="copy-review">Copy feedback</button><button data-action="go-receipts">Check receipts</button></div>`);
+}
+
+// ---- Preview ---------------------------------------------------------------------------------------
+let previewCache = { key: '', html: '' };
+function invoiceHTML() {
+  const f = fmt();
+  if (isSheetFormat(f)) {
+    const key = JSON.stringify([state.project, state.labor, state.expenses.map(r => [r.date, r.time, r.total, r.category, r.vendor, r.status]), f.id, f.updatedAt]);
+    if (previewCache.key === key) return previewCache.html;
+    const book = openBook(buildWorkbook(), f.sheet.mapping.sheet);
+    previewCache = { key, html: `<div class="sheet-paper">${renderBookHTML(book, { maxCol: f.sheet.mapping.maxCol })}</div>` };
+    return previewCache.html;
+  }
+  return `<div class="invoice-paper" style="--invoice-accent:${e(state.invoice.accent)}">${renderInvoice(state.invoice.templateId, enrichedState())}</div>`;
+}
 function preview() {
   const el = $('#invoice-preview');
   if (!el) return;
-
-  const currentTpl = template();
-  const stateData = enrichedState();
-  const accent = state.invoice.accent || '#a8c3d0';
-
-  el.classList.toggle('has-pdf-template', Boolean(currentTpl.pdf));
-  el.style.setProperty('--invoice-accent', accent);
-  el.innerHTML = renderInvoice(currentTpl, stateData, { editable: false });
-
-  const modalEl = $('#invoice-modal-content');
-  if (modalEl) {
-    modalEl.classList.toggle('has-pdf-template', Boolean(currentTpl.pdf));
-    modalEl.style.setProperty('--invoice-accent', accent);
-    modalEl.innerHTML = renderInvoice(currentTpl, stateData, { editable: true });
-  }
-
+  try { el.innerHTML = invoiceHTML(); } catch (err) { el.innerHTML = `<p class="notice">Preview failed: ${e(err.message)}</p>`; return; }
   requestAnimationFrame(() => {
-    const viewport = $('#scaler-viewport');
-    const stage = $('#scaler-stage');
-    if (viewport && stage) {
-      const availableWidth = viewport.clientWidth - 32;
-      const baseWidth = 680;
-
-      if (availableWidth > 0 && availableWidth < baseWidth) {
-        const scale = availableWidth / baseWidth;
-        stage.style.transform = `scale(${scale})`;
-        stage.style.marginBottom = `-${(stage.offsetHeight * (1 - scale))}px`;
-      } else {
-        stage.style.transform = 'none';
-        stage.style.marginBottom = '0px';
-      }
-    }
+    const viewport = $('#scaler-viewport'), stage = $('#scaler-stage');
+    if (!viewport || !stage) return;
+    const natural = el.firstElementChild?.scrollWidth || 680, available = viewport.clientWidth - 24;
+    const scale = Math.min(1, available / natural);
+    stage.style.width = `${natural}px`;
+    stage.style.transform = `scale(${scale})`;
+    stage.style.marginBottom = `-${stage.offsetHeight * (1 - scale)}px`;
   });
 }
+window.addEventListener('resize', () => { if (tab === 'invoice') preview(); });
 
-window.addEventListener('resize', () => {
-  if (tab === 'invoice') preview();
-});
+function enrichedState() {
+  return {
+    ...state,
+    project: { ...state.project, invoiceNumber: state.project.invoiceNumber?.trim() || state.project.defaultInvoiceNumber },
+    expenses: state.expenses.map((r, i) => ({ ...r, _i: i, imageThumbnail: images.get(r.receiptId)?.imageThumbnail || '' }))
+  };
+}
 
+// ---- Rendering -------------------------------------------------------------------------------------
 function render() {
   if (!state) return;
-  $('#view').innerHTML = tab === 'project' ? projectView() : tab === 'work' ? workView() : tab === 'receipts' ? receiptView() : invoiceView();
-  document.querySelectorAll('[data-tab]').forEach(b => {
-    b.classList.toggle('active', b.dataset.tab === tab);
-    b.setAttribute('aria-current', b.dataset.tab === tab ? 'step' : 'false');
-  });
+  const scroll = window.scrollY;
+  $('#view').innerHTML = { details: detailsView, work: workView, receipts: receiptsView, invoice: invoiceView }[tab]();
+  document.querySelectorAll('[data-tab]').forEach(b => { b.classList.toggle('active', b.dataset.tab === tab); b.setAttribute('aria-current', b.dataset.tab === tab ? 'step' : 'false'); });
   summary();
-  preview();
+  if (tab === 'invoice') preview();
+  if (tab === 'receipts') initDropzone();
+  window.scrollTo(0, scroll);
 }
-
 async function go(next) {
-  if (scanBusy || renderBusy) return;
+  if (busy) return;
   await saveChain;
-  tab = next;
-  location.hash = next;
-  message('');
-  render();
-  if (next === 'invoice') {
-    setTimeout(preview, 60);
-  }
+  tab = next; location.hash = next; message('');
+  render(); window.scrollTo(0, 0);
 }
 
-function updateField(path, value, element) {
+function updateField(path, value, el) {
   const old = getPath(path);
-  if (typeof old === 'number' || (element && element.type === 'number')) {
+  if (el?.type === 'number') {
     const max = path === 'project.taxRate' ? 100 : path.endsWith('.quantity') ? 1e6 : 1e12;
+    if (value === '' && /^expenses\./.test(path)) { setPath(path, ''); save(); summary(); return; }
     if (!validNumber(value, max)) throw new Error('Enter a valid number.');
     value = Number(value);
-    if (path.endsWith('.rate') || /^expenses\.\d+\.(total|vat)$/.test(path)) value = round(value, state.project.currency);
+    if (path.endsWith('.rate') || /^expenses\.\d+\.total$/.test(path)) value = round(value, cur());
   }
-  setPath(path, value);
-  if (path === 'project.taxType' && old !== value) {
-    state.project.taxRate = value === 'withholding' ? 3.3 : 10;
-  }
-  save();
-  summary();
+  if (path.startsWith('contractor.')) {          // the profile is shared by every invoice
+    setPath(path, value);
+    if (!state.review) saveProfile(state.contractor);
+  } else setPath(path, value);
+  if (path.startsWith('labor.')) delete state.labor[Number(path.split('.')[1])].auto;
+
+  const p = state.project;
+  if (path === 'project.month') setMonth(value);
+  if (path === 'project.sequence') invoiceNumberFromPattern();
+  if (path === 'project.periodMode' && value === 'month') setMonth(p.month || (p.shootStart || today()).slice(0, 7));
+  if (path === 'project.taxType' && old !== value) p.taxRate = value === 'withholding' ? 3.3 : value === 'vat' ? 10 : 0;
+  if (path === 'project.termsPreset' && value !== 'custom') { const due = dueFrom(p.invoiceDate, value); if (due) p.dueDate = due; }
+  if (path === 'project.invoiceDate' && p.termsPreset !== 'custom') { const due = dueFrom(value, p.termsPreset); if (due) p.dueDate = due; }
+  if (path === 'project.dueDate' && value !== dueFrom(p.invoiceDate, p.termsPreset)) p.termsPreset = 'custom';
+  if (path === 'contractor.entityType') applyFormat(fmt());
+  save(); summary();
   if (path.startsWith('labor.')) {
-    const i = Number(path.split('.')[1]), r = state.labor[i], el = document.querySelector(`[data-row-total="${i}"]`);
-    if (el) el.textContent = money(round(r.rate * r.quantity, state.project.currency), state.project.currency);
+    const i = Number(path.split('.')[1]), r = state.labor[i], cell = document.querySelector(`[data-row-total="${i}"]`);
+    if (cell && r) cell.textContent = money(round(r.rate * r.quantity, cur()), cur());
   }
 }
+// Fields whose change reshapes the page.
+const RERENDER = /^(formatId|project\.(month|periodMode|taxType|termsPreset|invoiceDate|sequence|shootStart|shootEnd|vatOnExpenses)|contractor\.entityType|expenses\.\d+\.(date|time|category|total|shootDay)|invoice\.)/;
 
-async function loadProject(id) {
-  const loaded = await db.get('projects', id);
-  if (!loaded) throw new Error('Project not found.');
-  state = loaded;
-  images = new Map();
-  for (const r of state.expenses) {
-    if (r.receiptId) {
-      const image = await db.get('receipts', r.receiptId);
-      if (image) images.set(r.receiptId, image);
-    }
-  }
-  setSetting('currentProjectId', id);
-  updatePicker();
-  render();
+// ---- Receipts: upload, read, statuses --------------------------------------------------------------
+async function storeReceiptFile(file) {
+  const rec = await readReceiptFile(file);
+  rec.id = uid(); rec.projectId = state.id;
+  await db.put('receipts', rec);
+  images.set(rec.id, rec);
+  return rec;
 }
-
-async function handleBatchUpload(files) {
-  if (!files || files.length === 0) return;
-  const imageFiles = [...files].filter(f => f.type.startsWith('image/'));
-  if (imageFiles.length === 0) return;
-
-  uploadProgress = { active: true, current: 0, total: imageFiles.length };
-  scanBusy = true;
-  render();
-
-  const apiKey = setting('apiKey');
-  let extractedCount = 0;
-
-  for (let i = 0; i < imageFiles.length; i++) {
-    const file = imageFiles[i];
-    uploadProgress.current = i + 1;
-    message(`Processing receipt ${i + 1} of ${imageFiles.length} with Gemini 2.5 Flash…`, true);
-    render();
-
-    try {
-      const full = await compressImage(file, 1200, 0.82);
-      const thumb = await compressImage(file, 400, 0.72);
-      const record = { id: uid(), projectId: state.id, imageFull: full, imageThumbnail: thumb, name: file.name };
-      await db.put('receipts', record);
-      images.set(record.id, record);
-
-      if (navigator.onLine && apiKey) {
-        try {
-          const items = await parseReceiptImage(full, apiKey, state.project.currency);
-          for (const item of items) {
-            state.expenses.unshift({
-              id: uid(),
-              receiptId: record.id,
-              vendor: item.vendor,
-              date: item.date,
-              total: item.total,
-              vat: item.vat,
-              currency: item.currency,
-              category: item.category,
-              verified: false,
-              warning: item.warning
-            });
-            extractedCount++;
-          }
-        } catch (ocrErr) {
-          state.expenses.unshift({
-            id: uid(),
-            receiptId: record.id,
-            vendor: '',
-            date: '',
-            total: '',
-            vat: '',
-            currency: state.project.currency,
-            category: '',
-            verified: false,
-            warning: 'Could not auto-scan'
-          });
-        }
-      } else {
-        state.expenses.unshift({
-          id: uid(),
-          receiptId: record.id,
-          vendor: '',
-          date: '',
-          total: '',
-          vat: '',
-          currency: state.project.currency,
-          category: '',
-          verified: false,
-          warning: ''
-        });
-      }
-    } catch (err) {
-      fail(err);
-    }
-  }
-
-  uploadProgress.active = false;
-  scanBusy = false;
-  await save();
-  render();
-
-  if (apiKey) {
-    message(`Batch complete: ${extractedCount} item(s) extracted from ${imageFiles.length} receipt(s).`);
-  } else {
-    message(`${imageFiles.length} receipt photo(s) saved.`);
-  }
+function autoShootDay(x) {
+  const s = suggestShootDays(events, x.date, x.time, fmt().returnLabel || 'return');
+  return s.length === 1 ? s[0].label : '';
 }
-
-async function scan(id) {
-  const r = state.expenses.find(r => r.id === id);
-  if (!r) return;
-  const apiKey = setting('apiKey');
-  if (!apiKey) {
-    message('Add your Gemini API Key in Settings.', true);
-    return;
-  }
-  scanBusy = true;
-  render();
-  message('Scanning with Gemini Flash…', true);
-
+const looksLikeToll = name => /hipass|hi-pass|하이패스/i.test(name);
+async function handleUpload(files) {
+  files = [...files].filter(isReceiptFile);
+  if (!files.length) return message('Choose PDF or image files.');
+  const apiKey = setting('apiKey'), f = fmt();
+  busy = true; let read = 0, failed = 0;
   try {
-    const items = await parseReceiptImage(images.get(r.receiptId).imageFull, apiKey, state.project.currency);
-    Object.assign(r, items[0], { verified: false });
-    await save();
-    message('Scan complete.');
-  } catch (err) {
-    fail(err);
-  } finally {
-    scanBusy = false;
-    render();
-  }
+    for (let n = 0; n < files.length; n++) {
+      message(`Reading ${n + 1} of ${files.length}: ${files[n].name}`, true);
+      let rec;
+      try { rec = await storeReceiptFile(files[n]); } catch (err) { failed++; fail(err); continue; }
+      if (looksLikeToll(files[n].name)) { busy = false; await tollFromRecord(rec); busy = true; continue; }
+      let items = [{}];
+      if (apiKey && navigator.onLine) {
+        try { items = await parseReceipt(rec, apiKey, { currency: cur(), categories: f.categories }); read++; }
+        catch (err) { items = [{ warning: `Could not read automatically (${err.message.slice(0, 80)}). Fill in by hand.` }]; failed++; }
+      }
+      if (items[0]?.documentType === 'toll_statement') { busy = false; await tollFromRecord(rec); busy = true; continue; }
+      for (const item of items) {
+        const x = newExpense({ ...item, receiptId: rec.id, source: 'receipt', currency: cur(), status: 'pending' });
+        x.shootDay = autoShootDay(x);
+        state.expenses.push(x);
+      }
+    }
+  } finally { busy = false; }
+  await save(); filter = 'all'; render();
+  message(apiKey ? `${plural(files.length, 'file')} added · ${read} read${failed ? ` · ${failed} need typing` : ''}.` : `${plural(files.length, 'file')} added. Type in the details.`);
 }
-
-function openInspector(expenseId) {
-  const r = state.expenses.find(x => x.id === expenseId);
+async function tollFromRecord(rec) {
+  const apiKey = setting('apiKey');
+  if (!apiKey) throw new Error('Reading a Hi-pass statement needs a Gemini key (Settings). Without one, add trips with "Add by hand".');
+  const existing = state.expenses.filter(r => r.source === 'hipass');
+  if (existing.length && !confirm(`This looks like a Hi-pass statement. Replace the current one (${plural(existing.length, 'trip')})?`)) return;
+  busy = true; message('Reading the Hi-pass statement…', true);
+  try {
+    const { cardLast4, trips } = await parseTollStatement(rec, apiKey);
+    if (!trips.length) throw new Error('No trips were found in this file. Check it is the usage statement (사용내역 확인증).');
+    for (const old of existing) if (old.receiptId && !state.expenses.some(r => r !== old && r.receiptId === old.receiptId && r.source !== 'hipass')) { images.delete(old.receiptId); db.remove('receipts', old.receiptId).catch(() => { }); }
+    state.expenses = state.expenses.filter(r => r.source !== 'hipass');
+    const category = matchCategory('Toll', fmt().categories) || 'Toll';
+    for (const t of trips) {
+      const route = [t.entry, t.exit].filter(Boolean).join(' → ');
+      const x = newExpense({ receiptId: rec.id, source: 'hipass', date: t.date, time: t.time, vendor: `하이패스 ${route}`.trim(), route, total: t.amount, vat: 0, category, paidBy: cardLast4 ? `하이패스 ${cardLast4}` : '하이패스', balanceAfter: t.balanceAfter, currency: cur(), status: 'pending' });
+      x.shootDay = autoShootDay(x);
+      state.expenses.push(x);
+    }
+    await save(); render();
+    message(`${plural(trips.length, 'trip')} imported. Review them in the Hi-pass table.`);
+  } finally { busy = false; }
+}
+async function rescan(id) {
+  const r = state.expenses.find(x => x.id === id), apiKey = setting('apiKey');
+  if (!apiKey) throw new Error('Add a Gemini key in Settings first.');
+  busy = true; message('Reading…', true);
+  try {
+    const [item] = await parseReceipt(images.get(r.receiptId), apiKey, { currency: cur(), categories: fmt().categories });
+    Object.assign(r, Object.fromEntries(Object.entries(item).filter(([, v]) => v !== '' && v !== undefined)), { status: 'pending' });
+    if (!r.shootDay) r.shootDay = autoShootDay(r);
+    await save(); message('Read again.');
+  } finally { busy = false; render(); }
+}
+async function setStatus(id, status) {
+  const r = state.expenses.find(x => x.id === id);
   if (!r) return;
-  inspectingExpenseId = expenseId;
-
-  const modal = $('#receipt-inspect-modal');
-  const imgTarget = $('#inspect-img-target');
-  const formTarget = $('#inspect-form-target');
-  const counterEl = $('#inspect-counter');
-  const prevBtn = $('#inspect-prev-btn');
-  const nextBtn = $('#inspect-next-btn');
-
-  const idx = state.expenses.findIndex(x => x.id === expenseId);
-  const total = state.expenses.length;
-
-  if (counterEl) counterEl.textContent = `#${idx + 1} of ${total}`;
-  if (prevBtn) prevBtn.disabled = (idx >= total - 1);
-  if (nextBtn) nextBtn.disabled = (idx <= 0);
-
-  const imgRecord = r.receiptId ? images.get(r.receiptId) : null;
-  imgTarget.src = imgRecord ? imgRecord.imageFull : '';
-  imgTarget.alt = imgRecord ? 'Receipt proof' : 'Manual entry (no image)';
-
-  const amountStep = state.project.currency === 'KRW' ? '1000' : 'any';
-
-  formTarget.innerHTML = `
-    <h3 style="margin-bottom:12px; font-size:16px;">Verify Line Item #${idx + 1}</h3>
-    <div class="form-grid" style="grid-template-columns:1fr; gap:12px;">
-      ${field('Vendor / 거래처', `expenses.${idx}.vendor`)}
-      ${field('Date / 날짜', `expenses.${idx}.date`, 'date')}
-      ${field('Total paid / 합계', `expenses.${idx}.total`, 'number', `min="0" step="${amountStep}"`)}
-      ${field('Included VAT / 부가세', `expenses.${idx}.vat`, 'number', `min="0" step="${amountStep}"`)}
-      ${field('Category', `expenses.${idx}.category`)}
-    </div>
-    <div style="margin-top:20px; display:flex; gap:10px;">
-      <button class="primary" data-action="confirm-receipt" data-id="${r.id}">
-        ${r.verified ? '✓ Already Verified' : 'Confirm & Verify'}
-      </button>
-    </div>
-  `;
-
-  if (!modal.open) modal.showModal();
+  if (status === 'verified' || status === 'check') validateReceipt(r, cur());
+  if (status === 'check' && !r.notes.trim()) r.notes = 'Confirm this is a work expense';
+  r.status = status;
+  await save();
 }
 
-function navigateInspector(delta) {
-  if (!inspectingExpenseId || !state.expenses.length) return;
-  const currentIdx = state.expenses.findIndex(x => x.id === inspectingExpenseId);
-  if (currentIdx === -1) return;
-
-  const nextIdx = currentIdx + delta;
-  if (nextIdx >= 0 && nextIdx < state.expenses.length) {
-    openInspector(state.expenses[nextIdx].id);
-  }
+// ---- Building deliverables -------------------------------------------------------------------------
+function buildWorkbook() {
+  const f = fmt(), p = state.project, t = totals(state);
+  const lines = invoiceLines(state, f);
+  return fillWorkbook(loadTemplate(f.sheet.base64), f.sheet.mapping, {
+    fields: { invoiceDate: p.invoiceDate, invoiceNumber: p.invoiceNumber || p.defaultInvoiceNumber, location: p.location || '', dueDate: f.sheet.mapping.fields.dueDate ? p.dueDate : undefined },
+    lines, roundTax: f.roundTax !== false,
+    results: { labor: t.labor, expenses: t.expenses, tax: t.tax, total: t.total, count: lines.reduce((n, l) => n + Number(l.qty || 0), 0) }
+  });
 }
-
-async function exportPersonalPDF(number) {
-  const t = template(), snapshot = structuredClone(enrichedState());
-  validateMapping(t);
-  if (!t.pdf.confirmed || t.pdf.fields.some(f => !f.reviewed)) throw Error('Review and save your PDF field mapping first.');
-  const required = ['clientName', 'invoiceNumber', 'totalAmountDue'];
-  if (snapshot.labor.length) required.push('laborTable');
-  if (snapshot.expenses.some(r => r.verified)) required.push('expenseTable');
-  if (totals(snapshot).tax) required.push('taxTotal');
-  const missing = required.filter(key => !t.pdf.fields.some(f => f.key === key));
-  if (missing.length) throw Error('Edit PDF mapping and add: ' + missing.join(', '));
-  if (snapshot.expenses.some(r => !r.verified)) throw Error('Verify all receipts before exporting.');
-  renderBusy = true;
-  const root = document.createElement('div'); root.className = 'pdf-export-root';
-  root.innerHTML = renderPDFTemplate(t, snapshot);
+async function invoicePdfBytes() {
+  if (!window.html2pdf) throw new Error('The PDF engine is still loading. Try again in a moment.');
+  if (isSheetFormat(fmt())) return sheetPdfBytes();
+  const root = document.createElement('div');
+  root.className = 'pdf-export-root';
+  root.innerHTML = invoiceHTML();
   document.body.append(root);
   try {
-    message('Rendering your personal invoice…'); await save();
-    await document.fonts.load('12px WrapKorean'); await document.fonts.ready;
-    await Promise.all([...root.querySelectorAll('img')].map(img => img.decode()));
-    for (const field of root.querySelectorAll('.pdf-filled-field')) {
-      if (field.scrollHeight > field.clientHeight + 1 || field.scrollWidth > field.clientWidth + 1)
-        throw Error('Text does not fit in ' + field.dataset.pdfField + '. Edit mapping to enlarge its box or reduce text size.');
-    }
-    const pages = [...root.children].map((node, i) => ({node, points: t.pdf.pages[i].points}));
-    if (snapshot.invoice.options.showReceiptGallery) {
-      for (const r of snapshot.expenses.filter(r => r.verified)) {
-        const node = document.createElement('section'); node.className = 'pdf-proof-page';
-        node.innerHTML = `<h2>Receipt proof</h2><p>${e(r.vendor)} · ${e(r.date)} · ${e(money(r.total, snapshot.project.currency))}</p>${r.imageThumbnail ? `<img src="${e(r.imageThumbnail)}" alt="Receipt proof">` : '<p>Manual expense — no image attached.</p>'}`;
-        root.append(node); pages.push({node, points: [595.28, 841.89]});
-      }
-    }
-    await Promise.all([...root.querySelectorAll('img')].map(img => img.decode()));
-    const dummy = document.createElement('div'); dummy.style.height = '1px'; root.append(dummy);
-    const pdf = await window.html2pdf().set({margin: 0, jsPDF: {unit: 'pt', format: 'a4'}}).from(dummy).toPdf().get('pdf');
-    for (const {node, points} of pages) {
-      const [w, h] = points;
-      const canvas = await window.html2pdf().set({margin: 0, jsPDF: {unit: 'pt', format: [510, node.offsetHeight * .75], orientation: node.offsetHeight < 680 ? 'landscape' : 'portrait'}, html2canvas: {scale: 2, backgroundColor: '#fff', scrollX: 0, scrollY: 0}}).from(node).toCanvas().get('canvas');
-      pdf.addPage([w, h], w > h ? 'landscape' : 'portrait');
-      pdf.addImage(canvas.toDataURL('image/jpeg', .98), 'JPEG', 0, 0, w, h);
-    }
-    pdf.deletePage(1);
-    pdf.save(number.replace(/[^\p{L}\p{N}_-]/gu, '_') + '.pdf');
-    message('Personal invoice PDF exported.');
-  } finally {root.remove(); renderBusy = false;}
-}
-
-async function exportPDF() {
-  const effectiveInvoiceNumber = state.project.invoiceNumber?.trim() || state.project.defaultInvoiceNumber;
-
-  if (
-    !state.project.projectTitle.trim() ||
-    !state.project.clientName.trim() ||
-    !state.contractor.name.trim() ||
-    !effectiveInvoiceNumber
-  ) {
-    throw new Error('Please fill in project, client, contractor name, and invoice number before exporting.');
-  }
-
-  if (template()?.pdf) return exportPersonalPDF(effectiveInvoiceNumber);
-
-  renderBusy = true;
-  const button = document.querySelector('[data-action=export]');
-  if (button) button.disabled = true;
-  if ($('#export-status')) $('#export-status').textContent = 'Rendering PDF…';
-
-  let root;
-  try {
-    await save();
-    root = document.createElement('div');
-    root.className = 'invoice-paper exporting';
-    root.style.setProperty('--invoice-accent', state.invoice.accent || '#a8c3d0');
-    root.innerHTML = renderInvoice(template(), enrichedState());
-
-    if (state.invoice.options?.showReceiptGallery === false) {
-      const proofs = root.querySelector('.proof-section');
-      if (proofs) proofs.remove();
-    }
-
-    document.body.append(root);
+    await document.fonts.ready;
     await Promise.all([...root.querySelectorAll('img')].map(img => img.decode().catch(() => { })));
-
-    const filename = (effectiveInvoiceNumber || 'WrapSheet').replace(/[^\p{L}\p{N}_-]/gu, '_') + '.pdf';
-
-    await window.html2pdf()
-      .set({
-        margin: [12, 10, 14, 10],
-        filename,
-        image: { type: 'jpeg', quality: 0.98 },
-        html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff', scrollY: 0, windowWidth: 760 },
-        jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
-        pagebreak: {
-          mode: ['avoid-all', 'css', 'legacy'],
-          avoid: ['h2', 'h1', 'tr', 'figure', '.invoice-totals', '.invoice-header', '.invoice-footer', 'p']
-        }
-      })
-      .from(root)
-      .save();
-
-    if ($('#export-status')) $('#export-status').textContent = 'PDF exported cleanly.';
-  } finally {
-    root?.remove();
-    renderBusy = false;
-    if (button) button.disabled = false;
+    const width = root.firstElementChild.scrollWidth;
+    return await window.html2pdf().set({
+      margin: isSheetFormat(fmt()) ? [8, 6, 8, 6] : [12, 10, 14, 10],
+      image: { type: 'jpeg', quality: 0.96 },
+      html2canvas: { scale: 2, backgroundColor: '#ffffff', scrollX: 0, scrollY: 0, x: 0, y: 0, windowWidth: width + 40 },
+      jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
+      pagebreak: { mode: ['css', 'legacy'], avoid: ['tr', 'h2', 'figure', '.invoice-totals'] }
+    }).from(root.firstElementChild).outputPdf('arraybuffer');
+  } finally { root.remove(); }
+}
+/** Spreadsheet formats: draw the sheet to a canvas, scale onto A4 pages, break pages between rows. */
+async function sheetPdfBytes() {
+  const f = fmt();
+  await document.fonts.load('10pt WrapKorean').catch(() => { });
+  const { canvas, rowBottoms, width: W, height: H } = renderBookCanvas(openBook(buildWorkbook(), f.sheet.mapping.sheet), { maxCol: f.sheet.mapping.maxCol, scale: 2.5 });
+  const dummy = document.createElement('div'); dummy.style.height = '1px'; document.body.append(dummy);
+  const pdf = await window.html2pdf().set({ margin: 0, jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' } }).from(dummy).toPdf().get('pdf');
+  dummy.remove();
+  const margin = 10, pageW = 210 - margin * 2, pageH = 297 - margin * 2;
+  const mmPerPx = pageW / W, pagePx = pageH / mmPerPx, ratio = canvas.width / W;
+  let start = 0;
+  while (start < H - 1) {
+    let end = Math.min(H, start + pagePx);
+    if (end < H) { const cut = rowBottoms.filter(y => y > start + 40 && y <= end).at(-1); if (cut) end = cut; }
+    const slice = document.createElement('canvas');
+    slice.width = canvas.width; slice.height = Math.ceil((end - start) * ratio);
+    slice.getContext('2d').drawImage(canvas, 0, Math.floor(start * ratio), canvas.width, slice.height, 0, 0, slice.width, slice.height);
+    pdf.addPage('a4', 'portrait');
+    pdf.addImage(slice.toDataURL('image/jpeg', 0.95), 'JPEG', margin, margin, pageW, (end - start) * mmPerPx);
+    start = end;
   }
+  pdf.deletePage(1);
+  return pdf.output('arraybuffer');
+}
+const getRecord = async id => images.get(id) || db.get('receipts', id);
+function requireBasics() {
+  const f = fmt();
+  if (!state.contractor.name?.trim() && !isSheetFormat(f)) throw new Error('Add your name in Profile before exporting.');
+  if (!state.labor.length && !state.expenses.some(isBillable)) throw new Error('Add work or receipts first.');
+}
+async function withBusy(label, fn) {
+  if (busy) return; busy = true; message(label, true);
+  try { await fn(); } finally { busy = false; }
 }
 
+// ---- Actions -----------------------------------------------------------------------------------------
 const actions = {
-  'edit-pdf-template': async () => {
-    const current = template();
-    if (!current?.pdf) return;
-    const edited = await editPDFTemplate(current, enrichedState(), () => setting('apiKey'));
-    if (!edited) return;
-    await db.put('templates', edited);
-    templates[templates.findIndex(t => t.id === edited.id)] = edited;
-    render(); message('PDF template mapping saved.');
-  },
-  // New line items prepend to top (unshift) so users can immediately edit
   'add-labor': async () => {
     const kind = $('#labor-kind').value;
-
-    // Auto-detect unit for monthly retainer, weekly rate, and buyout
-    let unit = 'day';
-    if (kind === 'Monthly Retainer') unit = 'month';
-    else if (kind === 'Weekly Rate') unit = 'week';
-    else if (kind === 'Project Buyout / Flat Fee') unit = 'flat';
-    else if (kind === 'Overtime') unit = 'hour';
-    else if (kind.includes('Rental')) unit = 'item';
-
-    state.labor.unshift({
-      id: uid(),
-      type: kind,
-      description: kind,
-      date: state.project.shootStart || today(),
-      quantity: 1,
-      rate: 0,
-      unit,
-      taxable: true
-    });
-    await save();
-    render();
+    const unit = /month/i.test(kind) ? 'month' : /week/i.test(kind) ? 'week' : /flat/i.test(kind) ? 'flat' : /hour/i.test(kind) ? 'hour' : /rental/i.test(kind) ? 'item' : 'day';
+    state.labor.push({ id: uid(), type: kind, description: kind, date: state.project.shootStart || today(), quantity: 1, rate: 0, unit, taxable: state.project.taxType !== 'none' });
+    await save(); render();
   },
-  'remove-labor': async id => {
-    state.labor = state.labor.filter(r => r.id !== id);
-    await save();
-    render();
-  },
+  'remove-labor': async id => { state.labor = state.labor.filter(r => r.id !== id); await save(); render(); },
   'manual-receipt': async () => {
-    state.expenses.unshift({ id: uid(), receiptId: null, vendor: '', date: today(), total: '', vat: 0, currency: state.project.currency, category: '', verified: false, warning: '' });
-    await save();
-    render();
+    state.expenses.push(newExpense({ date: state.project.periodMode === 'month' ? '' : today(), currency: cur(), source: 'manual', status: 'pending' }));
+    filter = 'all'; await save(); render();
+    document.querySelector('.receipt-row:last-of-type')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
   },
-  'confirm-receipt': async id => {
-    const r = state.expenses.find(r => r.id === id);
-    validateReceipt(r, state.project.currency);
-    r.verified = true;
-    await save();
-    message('Expense verified and included in total.');
-
-    const inspectModal = $('#receipt-inspect-modal');
-    if (inspectModal && inspectModal.open) {
-      const remainingUnverified = state.expenses.filter(x => !x.verified);
-      if (remainingUnverified.length > 0) {
-        openInspector(remainingUnverified[0].id);
-      } else {
-        inspectModal.close();
-      }
-    }
-    render();
-  },
-  'unconfirm-receipt': async id => {
-    const r = state.expenses.find(r => r.id === id);
-    if (r) {
-      r.verified = false;
-      await save();
-      message('Expense marked for editing and excluded from total.');
-      render();
-    }
+  'set-status': async (id, value) => {
+    await setStatus(id, value); render();
+    if ($('#receipt-inspect-modal').open) openInspector(id);
   },
   'remove-receipt': async id => {
-    state.expenses = state.expenses.filter(r => r.id !== id);
-    await save();
-    render();
+    const r = state.expenses.find(x => x.id === id);
+    if (!r || !confirm('Delete this receipt and its file?')) return;
+    state.expenses = state.expenses.filter(x => x.id !== id);
+    if (r.receiptId && !state.expenses.some(x => x.receiptId === r.receiptId)) { images.delete(r.receiptId); db.remove('receipts', r.receiptId).catch(() => { }); }
+    await save(); render();
   },
-  'edit-profile': () => {
-    profileEditing = true;
-    render();
-  },
-  'save-profile': () => {
-    profileEditing = false;
-    localStorage.setItem('wrapsheet.defaultContractor', JSON.stringify(state.contractor));
-    save();
-    render();
-    message(`★ Preset locked & saved as default (${state.contractor.name || 'Contractor'}).`);
-  },
-  'open-settings': () => {
-    $('#api-key').value = setting('apiKey');
-    $('#settings').showModal();
-  },
-  'scan': scan,
-  'export': exportPDF,
-  'remove-logo': async () => {
-    state.contractor.logo = '';
-    await save();
-    render();
-  },
-  'copy-summary': async () => {
-    const t = totals(state), c = state.project.currency;
-    const taxLabel = t.isWithholding ? 'Withholding Tax' : 'Labor Tax (VAT)';
-    const taxSign = t.isWithholding ? '−' : '+';
-
-    const summaryText = `[WrapSheet] ${state.project.projectTitle || 'Production'}
-Client: ${state.project.clientName || '-'}
-Invoice: ${state.project.invoiceNumber || state.project.defaultInvoiceNumber || '-'}
-Work & Equipment: ${money(t.labor, c)}
-${taxLabel} (${state.project.taxRate}%): ${taxSign}${money(t.tax, c)}
-Verified Expenses: ${money(t.expenses, c)}
-Total Due: ${money(t.total, c)}`;
-    await navigator.clipboard.writeText(summaryText);
-    message('Wrap summary copied to clipboard.');
-  },
-  'clone-project': async () => {
-    const clone = structuredClone(state);
-    clone.id = uid();
-    clone.project.projectTitle = `${clone.project.projectTitle || 'Shoot'} (Copy)`;
-    clone.project.invoiceNumber = `WS-${Date.now().toString().slice(-6)}`;
-    await db.put('projects', clone);
-    projects.push(clone);
-    await loadProject(clone.id);
-    message('Shoot duplicated.');
-  },
-  'delete-project': async () => {
-    const title = state.project.projectTitle || 'this shoot';
-    const confirmed = confirm(`Are you sure you want to permanently delete "${title}"? This clears all its associated receipts and data.`);
-    if (!confirmed) return;
-
-    const deleteItem = async (storeName, id) => {
-      if (typeof db.del === 'function') return db.del(storeName, id);
-      if (typeof db.deleteRecord === 'function') return db.deleteRecord(storeName, id);
-      if (typeof db.remove === 'function') return db.remove(storeName, id);
-      if (typeof db.delete === 'function') return db.delete(storeName, id);
-
-      return new Promise((resolve, reject) => {
-        const req = indexedDB.open('wrapsheet');
-        req.onsuccess = () => {
-          const idb = req.result;
-          try {
-            const tx = idb.transaction(storeName, 'readwrite');
-            tx.objectStore(storeName).delete(id);
-            tx.oncomplete = () => resolve();
-            tx.onerror = () => reject(tx.error);
-          } catch (e) {
-            resolve();
-          }
-        };
-        req.onerror = () => reject(req.error);
-      });
-    };
-
-    try {
-      for (const r of state.expenses) {
-        if (r.receiptId) {
-          await deleteItem('receipts', r.receiptId).catch(() => { });
-        }
-      }
-      await deleteItem('projects', state.id).catch(() => { });
-
-      projects = projects.filter(p => p.id !== state.id);
-
-      if (projects.length > 0) {
-        await loadProject(projects[0].id);
-        message(`"${title}" deleted. Switched to ${projects[0].project.projectTitle || 'production'}.`);
-      } else {
-        state = newProject();
-        const savedContractor = localStorage.getItem('wrapsheet.defaultContractor');
-        if (savedContractor) {
-          try { state.contractor = { ...state.contractor, ...JSON.parse(savedContractor) }; } catch { }
-        }
-        await save();
-        setSetting('currentProjectId', state.id);
-        render();
-        message(`"${title}" deleted.`);
-      }
-    } catch (err) {
-      fail(err);
+  'apply-shootday': async (id, value) => { const r = state.expenses.find(x => x.id === id); r.shootDay = value; await save(); render(); },
+  'filter': async (_, value) => { filter = value; render(); },
+  'scan': rescan,
+  'verify-toll-shootdays': async () => {
+    let n = 0, skipped = 0;
+    for (const r of state.expenses.filter(r => r.source === 'hipass' && r.status === 'pending')) {
+      if (!events.length || shootSuggestions(r).length) { r.status = 'verified'; if (!r.shootDay) r.shootDay = autoShootDay(r); n++; } else skipped++;
     }
+    await save(); render(); message(`${plural(n, 'trip')} verified${skipped ? `, ${skipped} left for you to decide` : ''}.`);
+  },
+  'verify-toll-all': async () => { for (const r of state.expenses.filter(r => r.source === 'hipass' && r.status === 'pending')) r.status = 'verified'; await save(); render(); },
+  'remove-toll': async () => {
+    if (!confirm('Remove all Hi-pass trips from this invoice?')) return;
+    for (const r of state.expenses.filter(r => r.source === 'hipass')) if (r.receiptId) { images.delete(r.receiptId); db.remove('receipts', r.receiptId).catch(() => { }); }
+    state.expenses = state.expenses.filter(r => r.source !== 'hipass'); await save(); render();
+  },
+  'clear-calendar': async () => { if (!confirm('Remove the imported shoot calendar from this device?')) return; await db.clear('schedule'); events = []; render(); if ($('#settings').open) openSettings(); },
+  'open-settings': () => openSettings(),
+  'open-profile': () => openProfile(),
+  'go-receipts': () => go('receipts'),
+  'open-preview': () => { $('#preview-modal-content').innerHTML = invoiceHTML(); $('#preview-modal').showModal(); },
+  'copy-text': async (_, value, btn) => {
+    await navigator.clipboard.writeText(value);
+    message(`Copied: ${value}`);
+    document.querySelectorAll('.copy-cell.copied').forEach(x => x.classList.remove('copied'));
+    btn?.classList.add('copied');
+  },
+
+  'download-xlsx': () => withBusy('Building spreadsheet…', async () => { requireBasics(); download(buildWorkbook(), fileNames(state, fmt()).xlsx); message('Spreadsheet downloaded.'); }),
+  'download-pdf': () => withBusy('Rendering PDF…', async () => { requireBasics(); download(await invoicePdfBytes(), fileNames(state, fmt()).pdf, 'application/pdf'); message('PDF downloaded.'); }),
+  'download-log': async () => { download(new Blob([expenseLogCSV(state, fmt(), images)], { type: 'text/csv;charset=utf-8' }), fileNames(state, fmt()).log); },
+  'download-receipts': () => withBusy('Collecting receipts…', async () => {
+    const files = await receiptFiles(state, fmt(), getRecord), folder = fileNames(state, fmt()).folder;
+    if (!files.length) throw new Error('No verified receipts with files yet.');
+    download(zip(files.map(f => ({ path: `${folder}/${f.name}`, bytes: f.bytes }))), `${folder}.zip`, 'application/zip');
+    message(`${plural(files.length, 'receipt file')} in ${folder}.zip.`);
+  }),
+  'copy-rows': async () => { const rows = sheetRowsForPaste(state, fmt()); await copyRich(rows); message(`${plural(rows.count, 'row')} copied (${rows.columns.length} columns).`); },
+  'download-all': () => withBusy('Preparing files…', async () => {
+    requireBasics();
+    const f = fmt(), n = fileNames(state, f), base = (state.project.invoiceNumber || 'invoice').replace(/[\\/:*?"<>|]/g, '_');
+    const entries = [{ path: `${base}/${n.pdf}`, bytes: new Uint8Array(await invoicePdfBytes()) }, { path: `${base}/${n.log}`, bytes: strToU8(expenseLogCSV(state, f, images)) }];
+    if (isSheetFormat(f)) entries.unshift({ path: `${base}/${n.xlsx}`, bytes: buildWorkbook() });
+    for (const file of await receiptFiles(state, f, getRecord)) entries.push({ path: `${base}/${n.folder}/${file.name}`, bytes: file.bytes });
+    download(zip(entries), `${base}.zip`, 'application/zip');
+    message('Everything downloaded as one zip.');
+  }),
+  'download-package': () => withBusy('Building submission…', async () => {
+    const f = fmt(), blocks = checklist(state, f, { hasFile: id => images.has(id) }).filter(i => i.level === 'block');
+    if (blocks.length) throw new Error(blocks[0].text);
+    const n = fileNames(state, f), base = n.package.replace(/\.zip$/, '');
+    const files = await receiptFiles(state, f, getRecord);
+    const entries = [
+      { path: `${base}/${n.pdf}`, bytes: new Uint8Array(await invoicePdfBytes()) },
+      { path: `${base}/${n.log}`, bytes: strToU8(expenseLogCSV(state, f, images)) },
+      ...files.map(x => ({ path: `${base}/receipts/${x.name}`, bytes: x.bytes })),
+      { path: `${base}/${SUBMISSION_FILE}`, bytes: strToU8(JSON.stringify(submissionManifest(state, f, files), null, 1)) }
+    ];
+    download(zip(entries), n.package, 'application/zip');
+    message('Submission package downloaded. Send it to arki pictures.');
+  }),
+  'next-period': async () => { await saveChain; await startNextMonth(state); },
+  'delete-project': async () => {
+    if (!confirm(`Delete "${projectLabel(state)}" and its receipts from this device?\n\nThis cannot be undone. Files you already downloaded are not affected.`)) return;
+    for (const r of state.expenses) if (r.receiptId) await db.remove('receipts', r.receiptId).catch(() => { });
+    await db.remove('projects', state.id);
+    projects = projects.filter(p => p.id !== state.id);
+    if (projects.length) await loadProject(projects.sort((a, b) => b.updatedAt - a.updatedAt)[0].id); else await createProject(fmt());
+    message('Invoice deleted.');
+  },
+  'edit-format': async () => { const out = await openFormatEditor(fmt()); if (out) { await saveFormat(out); message('Format saved.'); } },
+  'settings-edit-format': async id => {
+    $('#settings').close();
+    const out = await openFormatEditor(formats.find(x => x.id === id));
+    if (out) { await saveFormat(out, { use: state.formatId === id }); message('Format saved.'); }
+    openSettings('formats');
+  },
+  'open-review': async id => { $('#settings').close(); await loadProject(id); tab = 'invoice'; render(); },
+  'settings-export-format': async id => { const f = formats.find(x => x.id === id); download(new Blob([exportFormat(f)], { type: 'application/json' }), `${f.name.replace(/[^\p{L}\p{N}_-]+/gu, '_')}.wrapformat.json`); },
+  'settings-delete-format': async id => {
+    const f = formats.find(x => x.id === id), used = projects.filter(p => p.formatId === id).length;
+    if (!confirm(`Delete the format "${f.name}"?${used ? `\n\n${plural(used, 'invoice')} use it and will switch to the generic format.` : ''}`)) return;
+    await db.remove('formats', id); formats = formats.filter(x => x.id !== id);
+    for (const p of projects) if (p.formatId === id) { p.formatId = 'generic'; await db.put('projects', p); }
+    if (state.formatId === id) { state.formatId = 'generic'; await save(); }
+    render(); openSettings(); message('Format deleted.');
+  },
+  'test-key': testKey,
+  'backup': downloadBackup,
+  'review-mark': async (id, value) => { const r = state.expenses.find(x => x.id === id); r.reviewStatus = r.reviewStatus === value ? '' : value; await save(); render(); },
+  'copy-review': async () => {
+    const lines = state.expenses.filter(r => r.reviewStatus === 'query').sort(byDateTime).map(r => `- ${r.date} ${r.vendor} ${money(Number(r.total) || 0, cur())}: ${r.reviewNote || 'please check'}`);
+    const text = [`Hi ${state.contractor.name || ''},`, '', state.review.note || 'Thanks for your invoice. A few questions before we approve it:', '', ...lines, '', 'Please send an updated package when ready.'].join('\n');
+    await navigator.clipboard.writeText(text); message('Feedback copied.');
   }
 };
 
-function initDragAndDrop() {
-  const dropzone = $('#receipt-dropzone');
-  if (!dropzone) return;
+// ---- Dialogs ---------------------------------------------------------------------------------------
+function openProfile() {
+  const c = { ...state.contractor };
+  const f = (label, key, type = 'text', extra = '') => `<label>${label}<input name="${key}" type="${type}" value="${e(c[key] || '')}" ${extra}></label>`;
+  $('#profile-form').innerHTML = `
+    <div class="section-head"><div><h2>Profile</h2><p>Your details on freelance and arki pictures crew invoices. Client spreadsheets (like Eyeline) keep the name and bank block from their own sheet.</p></div><button type="button" class="dialog-close" data-close="profile-dialog" aria-label="Close">×</button></div>
+    ${formats.some(x => x.kind === 'sheet') ? `<div class="settings-row"><span class="grow status-text">Copy your details from a client spreadsheet you already use:</span>${formats.filter(x => x.kind === 'sheet').map(x => `<button type="button" data-fill-profile="${x.id}">${e(x.name.replace(/\s*\(.*\)$/, ''))}</button>`).join('')}</div>` : ''}
+    <div class="form-grid">
+      ${f('Name or company', 'name')}${f('Role / position', 'role', 'text', 'placeholder="e.g. Data wrangler"')}
+      ${f('Email', 'email', 'email')}${f('Phone', 'phone', 'tel')}
+      ${f('Business registration no. (if registered)', 'taxId')}
+      <label class="full">Address<textarea name="address">${e(c.address || '')}</textarea></label>
+      ${f('Bank', 'bankName')}${f('Account number', 'accountNumber')}${f('Account holder', 'accountHolder')}
+      <label class="full">Payment instructions<textarea name="paymentTerms">${e(c.paymentTerms || '')}</textarea></label>
+    </div>
+    <div class="button-row"><label class="file-button">${c.logo ? 'Change logo' : 'Add logo'}<input id="logo-input" type="file" accept="image/*"></label>${c.logo ? '<button type="button" id="remove-logo">Remove logo</button>' : ''}</div>
+    <p class="hint">Logo shows on built-in layouts only.</p>
+    <div class="dialog-actions"><button type="button" data-close="profile-dialog">Cancel</button><button class="primary" type="submit">Save</button></div>`;
+  $('#profile-dialog').showModal();
+}
 
-  ['dragenter', 'dragover'].forEach(name => {
-    dropzone.addEventListener(name, e => {
-      e.preventDefault();
-      e.stopPropagation();
-      dropzone.classList.add('dragover');
-    });
-  });
+/** Read the contractor's own block (NAME …) and the payment block from a client spreadsheet. */
+function profileFromSheet(format) {
+  const book = openBook(loadTemplate(format.sheet.base64), format.sheet.mapping.sheet);
+  const cells = [...book.cells.values()], text = c => String(c?.value ?? '').trim();
+  const at = (col, row) => text(book.cells.get(`${col}${row}`));
+  const out = {};
+  const nameLabel = cells.find(c => /^name:?$/i.test(text(c)) && splitRef(c.ref).row < format.sheet.mapping.headerRow);
+  if (nameLabel) {
+    const { col, row } = splitRef(nameLabel.ref), lines = [];
+    for (let r = row + 1; r < row + 10 && at(col, r); r++) lines.push(at(col, r));
+    const email = lines.find(l => /@/.test(l)), phone = lines.find(l => /^\+?[\d\s()-]{8,}$/.test(l));
+    const rest = lines.filter(l => l !== email && l !== phone);
+    if (rest[0]) { const inner = rest[0].match(/\(([^/()]+)/); out.name = (inner ? inner[1] : rest[0]).trim(); }
+    if (rest.length > 1) out.address = rest.slice(1).join(', ');
+    if (email) out.email = email; if (phone) out.phone = phone;
+  }
+  const valueRight = re => { const c = cells.find(x => re.test(text(x))); if (!c) return ''; const { col, row } = splitRef(c.ref); return at(String.fromCharCode(col.charCodeAt(0) + 1), row); };
+  const holder = valueRight(/^account\s*name/i), bank = valueRight(/^bank\s*name/i), acct = valueRight(/^account\s*(no|number)/i);
+  if (holder) out.accountHolder = holder; if (bank) out.bankName = bank; if (acct) out.accountNumber = acct;
+  return out;
+}
 
-  ['dragleave', 'drop'].forEach(name => {
-    dropzone.addEventListener(name, e => {
-      e.preventDefault();
-      e.stopPropagation();
-      dropzone.classList.remove('dragover');
-    });
-  });
+function patternFromExample(example) {
+  const m = String(example || '').match(/^(.*?)(\d+)(\D*)$/);
+  return m ? { pattern: `${m[1]}{num}${m[3]}`, digits: m[2].length, sequence: Number(m[2]) } : { pattern: '', digits: 3, sequence: 1 };
+}
 
-  dropzone.addEventListener('drop', async e => {
-    const files = [...e.dataTransfer.files].filter(f => f.type.startsWith('image/'));
-    await handleBatchUpload(files);
+async function formatFromSpreadsheet(file) {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  const book = openBook(bytes), mapping = analyzeBook(book), g = mapping.guess;
+  const num = patternFromExample(g.invoiceNumber);
+  const fileBase = file.name.replace(/\.xlsx$/i, '');
+  const fileNum = patternFromExample(fileBase);
+  const memos = [...new Set([...book.cells.values()].filter(c => { const r = splitRef(c.ref); return r.col === mapping.cols.memo && r.row > mapping.firstRow && r.row <= mapping.lastRow; }).map(c => String(c.value).trim()).filter(Boolean))];
+  const looksMonthly = /\d{8}\s*-\s*\d{8}/.test(String(book.cells.get(`${mapping.cols.date}${mapping.firstRow}`)?.value || ''));
+  return {
+    id: `fmt-${uid()}`, kind: 'sheet', updatedAt: Date.now(),
+    name: g.clientName ? `${g.clientName}${g.po ? ` (${g.po})` : ''}` : fileBase,
+    description: '',
+    categories: memos.length >= 2 ? [...new Set([...memos, 'Parking', 'Supplies', 'Other'])] : ['Gas', 'Meal', 'Toll', 'Parking', 'Supplies', 'Other'],
+    defaults: {
+      clientName: g.clientName, periodMode: looksMonthly ? 'month' : 'range', currency: mapping.fixed.currency || 'KRW',
+      termsPreset: /15/.test(g.terms) ? 'net_15' : /30/.test(g.terms) ? 'net_30' : /60/.test(g.terms) ? 'net_60' : 'due_receipt',
+      taxType: 'vat', taxRate: g.taxRate || 10, vatOnExpenses: g.vatOnExpenses, sequence: num.sequence + 1,
+      labor: g.laborMemo ? [{ type: 'Monthly fee', description: g.laborMemo, date: '', quantity: 1, rate: g.laborRate, unit: looksMonthly ? 'month' : 'day', taxable: true }] : []
+    },
+    numbering: { pattern: num.pattern, digits: num.digits },
+    files: { receipt: '{yyyymmdd}_{category}', folder: '{yymmdd}_{name}', xlsx: fileNum.pattern || '{invoiceNumber}', pdf: '{invoiceNumber}_Invoice', log: '{yyyymm}_expense_log' },
+    memo: 'category', returnLabel: 'return', timeZone: 'Asia/Seoul', roundTax: true, strict: false,
+    taxInvoice: { enabled: true, items: [`${g.laborMemo ? g.laborMemo.split(' - ')[0] : 'Service'} ({yyyy}.{mm})${g.po ? ` ${g.po}` : ''}`, `Reimbursed Expenses ({yyyy}.{mm})${g.po ? ` ${g.po}` : ''}`], note: '' },
+    sheet: { fileName: file.name, base64: bytesToBase64(bytes), mapping }
+  };
+}
+
+function openFormatEditor(format, { isNew = false } = {}) {
+  return new Promise(resolve => {
+    const m = format.sheet.mapping, dlg = $('#format-dialog'), form = $('#format-form');
+    const inp = (label, name, value, extra = '') => `<label>${label}<input name="${name}" value="${e(value ?? '')}" ${extra}></label>`;
+    form.innerHTML = `
+      <div class="section-head"><div><h2>${isNew ? 'New client format' : 'Edit format'}</h2><p>Detected from ${e(format.sheet.fileName)}. Check each value, then save.</p></div><button type="button" class="dialog-close" data-close="format-dialog" aria-label="Close">×</button></div>
+      <h3 class="sub">Spreadsheet</h3>
+      <div class="form-grid three">
+        ${inp('Format name', 'name', format.name, 'required class="full"')}
+        ${inp('Line table header row', 'headerRow', m.headerRow, 'type="number" min="1"')}
+        ${inp('First line row', 'firstRow', m.firstRow, 'type="number" min="1"')}
+        ${inp('Last line row (template)', 'lastRow', m.lastRow, 'type="number" min="1"')}
+        ${inp('Invoice date cell', 'f_invoiceDate', m.fields.invoiceDate)}
+        ${inp('Invoice number cell', 'f_invoiceNumber', m.fields.invoiceNumber)}
+        ${inp('Location cell', 'f_location', m.fields.location)}
+        ${inp('Due date cell (optional)', 'f_dueDate', m.fields.dueDate)}
+        ${inp('Project code (every line)', 'fx_project', m.fixed.project)}
+        ${inp('Cost centre (every line)', 'fx_costCentre', m.fixed.costCentre)}
+      </div>
+      <p class="hint">Columns: ${Object.entries(m.cols).map(([k, v]) => `${k} ${v}`).join(' · ')}. Totals: ${Object.entries(m.totals).map(([k, v]) => `${k} ${v}`).join(' · ') || 'none found'}${m.table ? ` · table ${m.table}` : ''}.</p>
+      <h3 class="sub">Rules</h3>
+      <div class="form-grid three">
+        ${inp('Invoice number pattern', 'numbering', format.numbering.pattern, 'placeholder="e.g. arki_NHL_#{num}"')}
+        ${inp('Number digits', 'digits', format.numbering.digits, 'type="number" min="1" max="6"')}
+        <label>Billing period<select name="periodMode"><option value="month" ${format.defaults.periodMode === 'month' ? 'selected' : ''}>Calendar month</option><option value="range" ${format.defaults.periodMode === 'range' ? 'selected' : ''}>Dates</option></select></label>
+        <label class="full">Expense categories (comma separated)<input name="categories" value="${e(format.categories.join(', '))}"></label>
+        <label>Line description<select name="memo">${[['category', 'Category only'], ['category-vendor', 'Category — vendor'], ['vendor', 'Vendor only']].map(([v, t]) => `<option value="${v}" ${format.memo === v ? 'selected' : ''}>${t}</option>`).join('')}</select></label>
+        ${inp('VAT rate (%)', 'taxRate', format.defaults.taxRate, 'type="number" min="0" max="100" step="0.1"')}
+        <label class="check-pill"><input type="checkbox" name="vatOnExpenses" ${format.defaults.vatOnExpenses ? 'checked' : ''}><span>VAT on expenses</span></label>
+        <label class="check-pill"><input type="checkbox" name="roundTax" ${format.roundTax !== false ? 'checked' : ''}><span>Round VAT to whole won</span></label>
+        ${inp('Return-trip label', 'returnLabel', format.returnLabel, 'placeholder="e.g. 복귀"')}
+      </div>
+      <h3 class="sub">File names</h3>
+      <div class="form-grid three">
+        ${inp('Receipts', 'f_receipt', format.files.receipt)}
+        ${inp('Receipts folder', 'f_folder', format.files.folder)}
+        ${inp('Spreadsheet', 'f_xlsx', format.files.xlsx)}
+        ${inp('PDF', 'f_pdf', format.files.pdf)}
+        ${inp('Expense log', 'f_log', format.files.log)}
+      </div>
+      <p class="hint">Tokens: {num} {invoiceNumber} {yyyymm} {yyyy} {mm} {yymmdd} (today) {name} {category} {yyyymmdd} (receipt date).</p>
+      <h3 class="sub">Tax invoice (Hometax)</h3>
+      <div class="form-grid">
+        ${inp('Item text — fees', 'ti_0', format.taxInvoice?.items?.[0])}
+        ${inp('Item text — expenses', 'ti_1', format.taxInvoice?.items?.[1])}
+        <label class="full">Notes shown with the values (recipients, remarks…)<textarea name="ti_note">${e(format.taxInvoice?.note || '')}</textarea></label>
+      </div>
+      <div class="dialog-actions">
+        ${isNew ? '' : '<button type="button" class="link-danger" data-format-delete>Delete format</button>'}
+        <label class="file-button">Replace spreadsheet<input type="file" data-format-replace accept=".xlsx"></label>
+        <button type="button" data-close="format-dialog">Cancel</button>
+        <button class="primary" type="submit">Save</button>
+      </div>`;
+    let replaced = null;
+    form.querySelector('[data-format-replace]').onchange = async ev => {
+      try { replaced = await formatFromSpreadsheet(ev.target.files[0]); message('Spreadsheet replaced. Check the cells, then save.'); }
+      catch (err) { fail(err); }
+    };
+    const delBtn = form.querySelector('[data-format-delete]');
+    if (delBtn) delBtn.onclick = async () => {
+      if (!confirm(`Delete the format "${format.name}"? Invoices using it switch to the generic format.`)) return;
+      await db.remove('formats', format.id); formats = formats.filter(x => x.id !== format.id);
+      for (const p of projects) if (p.formatId === format.id) { p.formatId = 'generic'; await db.put('projects', p); }
+      if (state.formatId === format.id) state.formatId = 'generic';
+      dlg.close(); resolve(null); render();
+    };
+    form.onsubmit = ev => {
+      ev.preventDefault();
+      const d = Object.fromEntries(new FormData(form));
+      const out = structuredClone(format);
+      if (replaced) { out.sheet = replaced.sheet; }
+      const mm = out.sheet.mapping;
+      Object.assign(mm, { headerRow: Number(d.headerRow), firstRow: Number(d.firstRow), lastRow: Number(d.lastRow) });
+      mm.laborStyleRow = mm.firstRow; mm.expenseStyleRow = mm.lastRow > mm.firstRow ? mm.firstRow + 1 : mm.firstRow;
+      for (const k of ['invoiceDate', 'invoiceNumber', 'location', 'dueDate']) mm.fields[k] = (d[`f_${k}`] || '').trim().toUpperCase() || undefined;
+      mm.fixed.project = d.fx_project; mm.fixed.costCentre = d.fx_costCentre;
+      out.name = d.name.trim() || out.name;
+      out.numbering = { pattern: d.numbering.trim(), digits: Number(d.digits) || 3 };
+      out.defaults = { ...out.defaults, periodMode: d.periodMode, taxRate: Number(d.taxRate), vatOnExpenses: Boolean(d.vatOnExpenses) };
+      out.roundTax = Boolean(d.roundTax);
+      out.categories = d.categories.split(',').map(s => s.trim()).filter(Boolean);
+      out.memo = d.memo; out.returnLabel = d.returnLabel.trim() || 'return';
+      out.files = { ...out.files, receipt: d.f_receipt, folder: d.f_folder, xlsx: d.f_xlsx, pdf: d.f_pdf, log: d.f_log };
+      out.taxInvoice = { enabled: true, items: [d.ti_0, d.ti_1], note: d.ti_note };
+      out.updatedAt = Date.now();
+      dlg.close(); resolve(out);
+    };
+    dlg.onclose = () => resolve(null);
+    dlg.showModal();
   });
 }
 
-function initSwipeListeners() {
-  const swipeArea = $('#inspect-swipe-area');
-  if (!swipeArea) return;
-
-  swipeArea.addEventListener('touchstart', e => {
-    touchStartX = e.changedTouches[0].screenX;
-    touchStartY = e.changedTouches[0].screenY;
-  }, { passive: true });
-
-  swipeArea.addEventListener('touchend', e => {
-    const touchEndX = e.changedTouches[0].screenX;
-    const touchEndY = e.changedTouches[0].screenY;
-    const diffX = touchEndX - touchStartX;
-    const diffY = touchEndY - touchStartY;
-
-    if (Math.abs(diffX) > 45 && Math.abs(diffX) > Math.abs(diffY)) {
-      if (diffX < 0) {
-        navigateInspector(-1);
-      } else {
-        navigateInspector(1);
-      }
-    }
-  }, { passive: true });
-}
-
-window.addEventListener('keydown', e => {
-  const modal = $('#receipt-inspect-modal');
-  if (!modal || !modal.open) return;
-
-  if (e.key === 'ArrowLeft') {
-    navigateInspector(1);
-  } else if (e.key === 'ArrowRight') {
-    navigateInspector(-1);
-  }
-});
-
-document.addEventListener('click', async event => {
-  const b = event.target.closest('button') || event.target.closest('a[data-action]');
-
-  const inspectImg = event.target.closest('[data-inspect-id]');
-  if (inspectImg) {
-    openInspector(inspectImg.dataset.inspectId);
-    return;
-  }
-
-  if (event.target.closest('#inspect-prev-btn')) {
-    navigateInspector(1);
-    return;
-  }
-
-  if (event.target.closest('#inspect-next-btn')) {
-    navigateInspector(-1);
-    return;
-  }
-
-  if (event.target.closest('#close-inspect-modal')) {
-    $('#receipt-inspect-modal')?.close();
-    inspectingExpenseId = null;
-    return;
-  }
-
-  if (event.target.closest('#scaler-viewport') || event.target.closest('#open-zoom-modal')) {
-    $('#invoice-zoom-modal')?.showModal();
-    preview();
-    return;
-  }
-
-  if (event.target.closest('#close-zoom-modal') || event.target.id === 'invoice-modal-backdrop') {
-    $('#invoice-zoom-modal')?.close();
-    return;
-  }
-
-  if (!b) return;
-
-  if (b.dataset.setColor) {
-    state.invoice.accent = b.dataset.setColor;
+async function saveFormat(format, { use = true } = {}) {
+  await db.put('formats', format);
+  const i = formats.findIndex(x => x.id === format.id);
+  if (i < 0) formats.push(format); else formats[i] = format;
+  previewCache.key = '';
+  if (use) {
+    applyFormat(format, { full: state.formatId !== format.id });
     await save();
-    preview();
-    render();
-    return;
   }
+  render();
+}
 
-  if (b.id === 'primary-action-btn') {
-    if (tab === 'project') await go('work');
-    else if (tab === 'work') await go('receipts');
-    else if (tab === 'receipts') await go('invoice');
-    else if (tab === 'invoice') {
-      try { await exportPDF(); } catch (err) { fail(err); }
-    }
-    return;
-  }
+// ---- Settings ----------------------------------------------------------------------------------------
+const TIME_ZONES = [['Asia/Seoul', 'Korea (Seoul)'], ['Asia/Shanghai', 'China (Shanghai)'], ['Asia/Tokyo', 'Japan (Tokyo)'], ['America/Los_Angeles', 'US Pacific'], ['America/New_York', 'US Eastern'], ['Europe/London', 'UK (London)']];
+let settingsTab = 'general';
+const help = text => `<button type="button" class="help-btn" aria-label="What is this?" aria-expanded="false">?</button><span class="help-text" hidden>${text}</span>`;
+const ago = iso => { if (!iso) return 'never'; const d = Math.floor((Date.now() - new Date(iso)) / 86400000); return d <= 0 ? 'today' : d === 1 ? 'yesterday' : `${d} days ago`; };
 
-  try {
-    if (b.dataset.go || b.dataset.tab) {
-      await go(b.dataset.go || b.dataset.tab);
-      return;
-    }
-    if (b.dataset.action) {
-      if (scanBusy || renderBusy) return;
-      b.disabled = true;
-      try {
-        await actions[b.dataset.action]?.(b.dataset.id);
-      } finally {
-        if (b.isConnected) b.disabled = false;
-      }
-    }
-  } catch (error) {
-    fail(error);
+function settingsGeneral() {
+  const tz = setting('timeZone') || 'Asia/Seoul', key = setting('apiKey');
+  return `
+    <section class="settings-section">
+      <h3>Receipt reading ${help('A free Gemini key from aistudio.google.com lets the site read dates, amounts, cards and Hi-pass trips from your files. Each file is sent to Google only when it is read. Without a key you can still upload receipts and type the details.')}</h3>
+      <form id="key-form" class="settings-row">
+        <input id="api-key" class="grow" type="password" autocomplete="off" value="${e(key)}" placeholder="Gemini API key" aria-label="Gemini API key">
+        <button type="button" data-action="test-key">Test</button>
+        <button class="primary" type="submit">Save</button>
+      </form>
+    </section>
+    <section class="settings-section">
+      <h3>Time zone ${help('Receipt times are compared with your shoot calendar in this time zone. Choose where you shoot, not where you are.')}</h3>
+      <div class="settings-row">
+        <select id="tz-select" class="grow" aria-label="Time zone">${TIME_ZONES.map(([v, t]) => `<option value="${v}" ${tz === v ? 'selected' : ''}>${t}</option>`).join('')}</select>
+      </div>
+    </section>`;
+}
+function settingsFormats() {
+  const list = formats.filter(f => f.kind === 'sheet');
+  return `
+    <section class="settings-section">
+      <h3>Client formats ${help('A client format is a company\'s own invoice layout, made from one of their past invoice spreadsheets. Add one from the Details tab. Export saves it as a file to use on another device.')}</h3>
+      ${list.length ? `<ul class="settings-list">${list.map(f => `<li><span>${e(f.name)}</span>
+        <button data-action="settings-edit-format" data-id="${f.id}">Edit</button>
+        <button data-action="settings-export-format" data-id="${f.id}">Export</button>
+        <button class="danger-quiet" data-action="settings-delete-format" data-id="${f.id}">Delete</button></li>`).join('')}</ul>` : '<p class="status-text">No client formats yet.</p>'}
+    </section>`;
+}
+function settingsBackup() {
+  const last = setting('lastBackup'), stale = !last || Date.now() - new Date(last) > 14 * 86400000;
+  return `
+    <section class="settings-section">
+      <h3>Backup ${help('Invoices, receipts and formats live only in this browser. Clearing browser data deletes them. A backup is one .zip file with everything; Restore brings it back on this or another device.')}</h3>
+      <div class="settings-row">
+        <span class="grow status-text ${stale ? 'warn-text' : ''}">Last backup: ${ago(last)} · ${plural(projects.length, 'invoice')}</span>
+        <label class="file-button">Restore<input id="backup-input" type="file" accept=".zip"></label>
+        <button data-action="backup">Download backup</button>
+      </div>
+    </section>`;
+}
+function settingsStudio() {
+  const reviews = projects.filter(p => p.review).sort((a, b) => (b.review.importedAt || '').localeCompare(a.review.importedAt || ''));
+  return `
+    <section class="settings-section">
+      <h3>Crew submissions ${help('Crew hired by arki pictures use this site with the "arki pictures — crew invoice" format and send you a submission package (.zip). Open it here to recalculate their totals, look at every receipt, and mark each line OK or Query.')}</h3>
+      <label class="drop-target">Open a submission package (.zip)<input id="review-input" type="file" accept=".zip,application/zip"></label>
+      ${reviews.length ? `<ul class="settings-list">${reviews.map(p => {
+        const q = p.expenses.filter(r => r.reviewStatus === 'query').length;
+        return `<li><span>${e(p.contractor.name || 'Crew')} · ${e(p.project.projectTitle || '')}<small>${e(money(totals(p).total, p.project.currency))}${q ? ` · ${q} ${q === 1 ? 'query' : 'queries'}` : ''}</small></span>
+          <button data-action="open-review" data-id="${p.id}">Open</button></li>`;
+      }).join('')}</ul>` : '<p class="status-text">No submissions opened yet.</p>'}
+    </section>`;
+}
+function openSettings(tabName) {
+  if (tabName) settingsTab = tabName;
+  const tabs = [['general', 'General'], ['formats', 'Client formats'], ['backup', 'Backup'], ['studio', 'arki studio']];
+  $('#settings-body').innerHTML = `
+    <div class="section-head"><div><h2>Settings</h2></div><button type="button" class="dialog-close" data-close="settings" aria-label="Close">×</button></div>
+    <nav class="settings-tabs">${tabs.map(([k, t]) => `<button class="${settingsTab === k ? 'active' : ''}" data-settings-tab="${k}">${t}</button>`).join('')}</nav>
+    ${{ general: settingsGeneral, formats: settingsFormats, backup: settingsBackup, studio: settingsStudio }[settingsTab]()}`;
+  const keyForm = $('#key-form');
+  if (keyForm) keyForm.onsubmit = ev => { ev.preventDefault(); setSetting('apiKey', $('#api-key').value.replace(/\s+/g, '')); message($('#api-key').value ? 'Key saved.' : 'Key removed.'); render(); };
+  const tzSel = $('#tz-select');
+  if (tzSel) tzSel.onchange = ev => { setSetting('timeZone', ev.target.value); message('Time zone saved. Import the calendar again to apply it.'); };
+  if (!$('#settings').open) $('#settings').showModal();
+}
+
+const toB64 = buf => bytesToBase64(new Uint8Array(buf));
+async function downloadBackup() {
+  const receipts = await db.all('receipts');
+  const data = {
+    wrapsheetBackup: 1, createdAt: new Date().toISOString(),
+    projects: await db.all('projects'), formats, events,
+    receipts: receipts.map(r => ({ ...r, original: r.original ? toB64(r.original) : undefined })),
+    settings: { profile: setting('profile'), profileLogo: setting('profileLogo'), timeZone: setting('timeZone') }
+  };
+  download(zip([{ path: 'wrapsheet-backup.json', bytes: strToU8(JSON.stringify(data)) }]), `wrapsheet-backup-${today()}.zip`, 'application/zip');
+  setSetting('lastBackup', new Date().toISOString());
+  if ($('#settings').open) openSettings();
+}
+async function restoreBackup(file) {
+  const { unzipSync, strFromU8 } = await import('./vendor/fflate.js');
+  const entries = unzipSync(new Uint8Array(await file.arrayBuffer()));
+  const raw = entries['wrapsheet-backup.json'];
+  if (!raw) throw new Error('This is not a WrapSheet backup.');
+  const data = JSON.parse(strFromU8(raw));
+  if (!confirm(`Restore ${plural(data.projects.length, 'invoice')} from ${data.createdAt.slice(0, 10)}? Invoices with the same ID are replaced; others are kept.`)) return;
+  await db.putMany('projects', data.projects);
+  if (data.formats?.length) await db.putMany('formats', data.formats);
+  if (data.events?.length) { await db.clear('schedule'); await db.putMany('schedule', data.events); }
+  for (const r of data.receipts || []) await db.put('receipts', { ...r, original: r.original ? loadTemplate(r.original).buffer : undefined });
+  for (const k of ['profile', 'profileLogo', 'timeZone']) if (data.settings?.[k]) setSetting(k, data.settings[k]);
+  projects = (await db.all('projects')).map(upgradeProject); formats = await db.all('formats'); events = await db.all('schedule');
+  await loadProject(data.projects[0]?.id || state.id);
+  $('#settings').close(); message('Backup restored.');
+}
+async function testKey() {
+  const key = $('#api-key').value.replace(/\s+/g, '');
+  if (!key) throw new Error('Paste a key first.');
+  message('Testing the key…', true);
+  const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(key)}`);
+  if (res.ok) message('The key works.'); else throw new Error(res.status === 400 || res.status === 403 ? 'Google rejected this key. Copy it again from aistudio.google.com.' : `Could not reach Google (${res.status}).`);
+}
+
+// ---- Inspector ---------------------------------------------------------------------------------------
+const inspectable = () => sortedExpenses().filter(x => x.r.source !== 'hipass' && (filter === 'all' || x.r.status === filter));
+function openInspector(id) {
+  const list = inspectable(), idx = list.findIndex(x => x.r.id === id);
+  if (idx < 0) return;
+  inspectingId = id;
+  const { r, i } = list[idx], rec = r.receiptId ? images.get(r.receiptId) : null;
+  $('#inspect-counter').textContent = `${idx + 1} of ${list.length}`;
+  $('#inspect-prev-btn').disabled = idx === 0; $('#inspect-next-btn').disabled = idx === list.length - 1;
+  $('#inspect-img-target').src = rec?.imageFull || '';
+  const dis = r.status === 'verified' || r.status === 'excluded' ? 'disabled' : '';
+  $('#inspect-form-target').innerHTML = `
+    <span class="badge status-${r.status}">${STATUS[r.status]}</span>
+    <div class="form-grid" style="grid-template-columns:1fr 1fr; gap:12px; margin-top:12px">
+      ${field('Date', `expenses.${i}.date`, 'date', dis)}${field('Time', `expenses.${i}.time`, 'time', dis)}
+      ${field('Vendor', `expenses.${i}.vendor`, 'text', dis)}${field(`Amount (${cur()})`, `expenses.${i}.total`, 'number', `step="any" ${dis}`)}
+      <label>Category<input data-field="expenses.${i}.category" list="category-list" value="${e(r.category)}" ${dis}></label>
+      <label>Paid by<input data-field="expenses.${i}.paidBy" list="card-list" value="${e(r.paidBy)}" ${dis}></label>
+      <label class="full">Shoot day<input data-field="expenses.${i}.shootDay" list="sd-${r.id}" value="${e(r.shootDay)}" ${dis}></label>
+      <label class="full">Notes<input data-field="expenses.${i}.notes" value="${e(r.notes)}" ${dis}></label>
+    </div>
+    <div class="actions">${statusButtons(r)}</div>`;
+  if (!$('#receipt-inspect-modal').open) $('#receipt-inspect-modal').showModal();
+}
+function stepInspector(delta) {
+  const list = inspectable(), idx = list.findIndex(x => x.r.id === inspectingId);
+  const next = list[idx + delta]; if (next) openInspector(next.r.id);
+}
+
+// ---- Projects ----------------------------------------------------------------------------------------
+async function loadProject(id) {
+  const loaded = await db.get('projects', id);
+  if (!loaded) throw new Error('Invoice not found.');
+  state = applyProfile(upgradeProject(loaded));
+  if (state.invoice.labels.invoiceTitle === 'WRAP SHEET / INVOICE') state.invoice.labels.invoiceTitle = 'INVOICE';
+  images = new Map();
+  for (const rid of new Set(state.expenses.map(r => r.receiptId).filter(Boolean))) { const rec = await db.get('receipts', rid); if (rec) images.set(rid, rec); }
+  setSetting('currentProjectId', id);
+  filter = 'all'; previewCache.key = '';
+  updatePicker(); render();
+}
+/** The latest invoice made with a format (by month, then by edit time). */
+const latestFor = formatId => projects.filter(p => p.formatId === formatId && !p.review)
+  .sort((a, b) => (b.project.month || '').localeCompare(a.project.month || '') || b.updatedAt - a.updatedAt)[0];
+
+async function startNextMonth(source) {
+  const next = upgradeProject(structuredClone(source));
+  Object.assign(next, { id: uid(), expenses: [], review: null, updatedAt: Date.now() });
+  const prevMonth = next.project.month;
+  const highest = Math.max(...projects.filter(p => p.formatId === source.formatId).map(p => Number(p.project.sequence) || 0), Number(source.project.sequence) || 0);
+  next.project.sequence = highest + 1;
+  next.project.location = '';
+  next.project.projectTitle = (next.project.projectTitle || '').replace(prevMonth, shiftMonth(prevMonth, 1));
+  state = applyProfile(next); images = new Map();
+  setMonth(shiftMonth(prevMonth, 1));
+  if (!fmt().numbering?.pattern) next.project.invoiceNumber = '';
+  await save(); setSetting('currentProjectId', state.id); tab = 'details'; location.hash = 'details'; render();
+  message(`Started ${state.project.invoiceNumber || 'the next invoice'} for ${state.project.month}.`);
+}
+
+function openNewInvoice() {
+  const monthName = m => new Date(m + '-01T00:00:00').toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+  const options = [];
+  for (const f of formats.filter(x => x.kind === 'sheet')) {
+    const last = latestFor(f.id);
+    if (last && last.project.periodMode === 'month') {
+      const seq = Math.max(...projects.filter(p => p.formatId === f.id).map(p => Number(p.project.sequence) || 0)) + 1;
+      const num = f.numbering?.pattern ? fillPattern(f.numbering.pattern, { ...last, project: { ...last.project, sequence: seq } }, f) : '';
+      options.push({ kind: 'next', id: last.id, title: `${f.name} — next month`, sub: `${num ? num + ' · ' : ''}${monthName(shiftMonth(last.project.month, 1))} · same fee, empty receipts` });
+    } else options.push({ kind: 'format', id: f.id, title: f.name, sub: last ? 'New invoice in this format' : 'First invoice in this format' });
   }
+  options.push({ kind: 'format', id: 'generic', title: 'Freelance invoice (generic)', sub: 'Your own layout, any client' });
+  options.push({ kind: 'format', id: 'arki-crew', title: 'arki pictures — crew invoice', sub: 'For crew hired by arki pictures' });
+  $('#new-body').innerHTML = `
+    <div class="section-head"><div><h2>New invoice</h2></div><button type="button" class="dialog-close" data-close="new-dialog" aria-label="Close">×</button></div>
+    <div class="choice-list">${options.map(o => `<button class="choice" data-new-kind="${o.kind}" data-new-id="${o.id}"><strong>${e(o.title)}</strong><span>${e(o.sub)}</span></button>`).join('')}</div>`;
+  $('#new-dialog').showModal();
+}
+
+async function createProject(format) {
+  state = applyProfile(newProject());
+  images = new Map();
+  applyFormat(format, { full: true });
+  // Never repeat a number already used in this format.
+  const used = projects.filter(p => p.formatId === format.id).map(p => Number(p.project.sequence) || 0);
+  if (used.length) { state.project.sequence = Math.max(...used, Number(state.project.sequence) - 1) + 1; invoiceNumberFromPattern(); }
+  await save(); setSetting('currentProjectId', state.id);
+  tab = 'details'; location.hash = 'details'; render();
+}
+
+async function importReview(file) {
+  const { manifest, files } = readSubmission(await file.arrayBuffer());
+  const s = upgradeProject(manifest.state);
+  s.id = uid(); s.formatId = manifest.formatId || 'arki-crew';
+  s.review = { importedAt: new Date().toISOString(), fileName: file.name, claimed: manifest.claimed, note: '' };
+  for (const r of s.expenses) { r.reviewStatus = ''; r.reviewNote = ''; }
+  await db.put('projects', s); projects.push(s);
+  for (const [rid, name] of Object.entries(manifest.files || {})) {
+    const bytes = files.get(name);
+    if (!bytes) continue;
+    const rec = await readReceiptFile(new File([bytes], name, { type: 'application/pdf' }));
+    rec.id = rid; rec.projectId = s.id;
+    await db.put('receipts', rec);
+  }
+  const missing = s.expenses.filter(r => r.receiptId && !files.get(manifest.files?.[r.receiptId])).length;
+  await loadProject(s.id);
+  tab = 'invoice'; render();
+  message(`Submission from ${s.contractor.name || 'crew'} imported${missing ? ` · ${missing} receipt file(s) missing` : ''}.`);
+}
+
+// ---- Events --------------------------------------------------------------------------------------------
+function initDropzone() {
+  const zone = $('#receipt-dropzone');
+  if (!zone) return;
+  ['dragenter', 'dragover'].forEach(n => zone.addEventListener(n, ev => { ev.preventDefault(); zone.classList.add('dragover'); }));
+  ['dragleave', 'drop'].forEach(n => zone.addEventListener(n, ev => { ev.preventDefault(); zone.classList.remove('dragover'); }));
+  zone.addEventListener('drop', ev => handleUpload(ev.dataTransfer.files).catch(fail));
+}
+const swipe = $('#inspect-swipe-area');
+swipe.addEventListener('touchstart', ev => { touchStartX = ev.changedTouches[0].screenX; touchStartY = ev.changedTouches[0].screenY; }, { passive: true });
+swipe.addEventListener('touchend', ev => {
+  const dx = ev.changedTouches[0].screenX - touchStartX, dy = ev.changedTouches[0].screenY - touchStartY;
+  if (Math.abs(dx) > 45 && Math.abs(dx) > Math.abs(dy)) stepInspector(dx < 0 ? 1 : -1);
+}, { passive: true });
+window.addEventListener('keydown', ev => {
+  if (!$('#receipt-inspect-modal').open || ev.target.matches('input, textarea, select')) return;
+  if (ev.key === 'ArrowLeft') stepInspector(-1); if (ev.key === 'ArrowRight') stepInspector(1);
 });
 
-document.addEventListener('input', event => {
-  const el = event.target;
-  if (!el.dataset.field || el.type === 'checkbox' || el.tagName === 'SELECT') return;
+document.addEventListener('click', async ev => {
+  const t = ev.target;
+  const helpBtn = t.closest('.help-btn');
+  if (helpBtn) {
+    const txt = helpBtn.nextElementSibling, open = txt.hidden;
+    document.querySelectorAll('.help-text').forEach(x => { x.hidden = true; x.previousElementSibling?.setAttribute('aria-expanded', 'false'); });
+    txt.hidden = !open; helpBtn.setAttribute('aria-expanded', String(open)); return;
+  }
+  if (!t.closest('.help-text')) document.querySelectorAll('.help-text:not([hidden])').forEach(x => { x.hidden = true; x.previousElementSibling?.setAttribute('aria-expanded', 'false'); });
+  const choice = t.closest('[data-new-kind]');
+  if (choice) {
+    $('#new-dialog').close();
+    try {
+      await saveChain;
+      if (choice.dataset.newKind === 'next') await startNextMonth(projects.find(p => p.id === choice.dataset.newId));
+      else { await createProject(findFormat(formats, choice.dataset.newId)); message('New invoice started.'); }
+    } catch (error) { fail(error); }
+    return;
+  }
+  const stab = t.closest('[data-settings-tab]');
+  if (stab) { openSettings(stab.dataset.settingsTab); return; }
+  const closeBtn = t.closest('[data-close]');
+  if (closeBtn) { $(`#${closeBtn.dataset.close}`).close(); return; }
+  const inspect = t.closest('[data-inspect-id]');
+  if (inspect) { openInspector(inspect.dataset.inspectId); return; }
+  if (t.closest('#inspect-prev-btn')) return stepInspector(-1);
+  if (t.closest('#inspect-next-btn')) return stepInspector(1);
+  if (t.closest('#close-inspect-modal')) { $('#receipt-inspect-modal').close(); render(); return; }
+  if (t.closest('#close-preview-modal')) { $('#preview-modal').close(); return; }
+  const fill = t.closest('[data-fill-profile]');
+  if (fill) {
+    const got = profileFromSheet(formats.find(x => x.id === fill.dataset.fillProfile));
+    for (const [k, v] of Object.entries(got)) { const input = $(`#profile-form [name=${k}]`); if (input && v) input.value = v; }
+    message(Object.keys(got).length ? 'Details copied. Check them, then Save.' : 'No details found in that spreadsheet.');
+    return;
+  }
+  if (t.id === 'remove-logo') { state.contractor.logo = ''; setSetting('profileLogo', ''); await save(); openProfile(); return; }
+  const b = t.closest('button, a[data-action]');
+  if (!b) return;
   try {
+    if (b.dataset.setColor) { state.invoice.accent = b.dataset.setColor; await save(); render(); return; }
+    if (b.id === 'primary-action-btn') {
+      const next = { details: 'work', work: 'receipts', receipts: 'invoice' }[tab];
+      if (next) return go(next);
+      const f = fmt();
+      return actions[f.crew && !state.review ? 'download-package' : 'download-all']();
+    }
+    if (b.dataset.tab) return go(b.dataset.tab);
+    if (b.dataset.action && actions[b.dataset.action]) {
+      if (busy && !['filter', 'copy-text'].includes(b.dataset.action)) return;
+      b.disabled = true;
+      try { await actions[b.dataset.action](b.dataset.id, b.dataset.value, b); } finally { if (b.isConnected) b.disabled = false; }
+    }
+  } catch (error) { fail(error); }
+});
+
+document.addEventListener('input', ev => {
+  const el = ev.target;
+  if (el.dataset.reviewNote) { const r = state.expenses.find(x => x.id === el.dataset.reviewNote); r.reviewNote = el.value; save(); return; }
+  if (!el.dataset.field || el.type === 'checkbox' || el.tagName === 'SELECT' || ['date', 'time', 'month'].includes(el.type)) return;
+  try {
+    if (el.dataset.field === 'formatId') return;
     updateField(el.dataset.field, el.value, el);
     if (tab === 'invoice') preview();
-  } catch (error) {
-    fail(error);
-  }
+  } catch (error) { fail(error); }
 });
 
-document.addEventListener('change', async event => {
-  const el = event.target;
+document.addEventListener('change', async ev => {
+  const el = ev.target;
   try {
+    if (el.dataset.actionChange) { await actions[el.dataset.actionChange](el.dataset.id, el.value); return; }
+    if (el.dataset.field === 'formatId') {
+      const f = findFormat(formats, el.value);
+      applyFormat(f, { full: true });
+      await save(); render(); return;
+    }
     if (el.dataset.field) {
-      const val = el.type === 'checkbox' ? el.checked : el.value;
-      updateField(el.dataset.field, val, el);
-
-      if (el.dataset.field === 'project.termsPreset') {
-        const computed = calculateDueDate(state.project.invoiceDate, val);
-        if (computed) {
-          updateField('project.dueDate', computed, $('#payment-due-input'));
-          const dueInput = $('#payment-due-input');
-          if (dueInput) dueInput.value = computed;
-        }
-      }
-
-      if (el.dataset.field === 'project.dueDate') {
-        const presetSelect = $('#payment-terms-preset');
-        if (presetSelect && state.project.termsPreset !== 'custom') {
-          const expected = calculateDueDate(state.project.invoiceDate, state.project.termsPreset);
-          if (val !== expected) {
-            updateField('project.termsPreset', 'custom', presetSelect);
-            presetSelect.value = 'custom';
-          }
-        }
-      }
-
-      if (el.dataset.field === 'project.invoiceDate' && state.project.termsPreset !== 'custom') {
-        const computed = calculateDueDate(val, state.project.termsPreset || 'due_receipt');
-        if (computed) {
-          updateField('project.dueDate', computed, $('#payment-due-input'));
-          const dueInput = $('#payment-due-input');
-          if (dueInput) dueInput.value = computed;
-        }
-      }
-
-      if (el.dataset.field === 'project.taxType') {
-        render();
-      }
-
-      if (tab === 'invoice') preview();
+      updateField(el.dataset.field, el.type === 'checkbox' ? el.checked : el.value, el);
+      if (RERENDER.test(el.dataset.field) && !$('#receipt-inspect-modal').open) render();
+      else if (tab === 'invoice') preview();
       return;
     }
-
-    if (['camera-input', 'receipt-input', 'logo-input', 'template-input', 'pdf-template-input'].includes(el.id)) {
-      const files = [...el.files];
-      if (el.id === 'camera-input' || el.id === 'receipt-input') {
-        await handleBatchUpload(files);
-      }
-      if (el.id === 'logo-input' && files[0]) {
-        state.contractor.logo = await compressImage(files[0], 500, 0.9);
-        await save();
-      }
-      if (el.id === 'pdf-template-input' && files[0]) {
-        renderBusy = true;
-        try {
-          message('Reading PDF and detecting fields…', true);
-          const pdf = await importPDF(files[0]);
-          const draft = { id: uid(), name: files[0].name.replace(/\.pdf$/i, ''), pdf };
-          const mapped = await editPDFTemplate(draft, enrichedState(), () => setting('apiKey'));
-          if (mapped) {
-            await db.put('templates', mapped); templates.push(mapped);
-            state.invoice.templateId = mapped.id; await save();
-            message('Personal PDF template saved and ready to reuse.');
-          } else message('PDF import cancelled. Your current template is unchanged.');
-        } finally { renderBusy = false; }
-      }
-      if (el.id === 'template-input' && files[0]) {
-        const raw = await files[0].text();
-        const html = checkTemplate(sanitizeTemplate(raw));
-        const customT = { id: uid(), name: files[0].name.replace(/\.html?$/i, ''), html };
-        await db.put('templates', customT);
-        templates.push(customT);
-        state.invoice.templateId = customT.id;
-        await save();
-        message('Custom HTML template installed.');
-      }
-      el.value = '';
-      render();
+    const files = [...(el.files || [])];
+    if (!files.length) return;
+    if (el.id === 'receipt-input' || el.id === 'camera-input') await handleUpload(files);
+    else if (el.id === 'ics-input') {
+      const list = await readCalendarFile(files[0], { timeZone: setting('timeZone') || 'Asia/Seoul' });
+      if (!list.length) throw new Error('No events found in that file.');
+      await db.clear('schedule'); await db.putMany('schedule', list); events = list;
+      for (const r of state.expenses) if (!r.shootDay && r.status === 'pending') r.shootDay = autoShootDay(r);
+      await save(); render(); if ($('#settings').open) openSettings(); message(`${plural(list.length, 'calendar event')} imported.`);
     }
-  } catch (error) {
-    fail(error);
-  }
-});
-
-document.addEventListener('focusout', event => {
-  const el = event.target.closest('[data-edit]');
-  if (!el) return;
-  const path = el.dataset.edit;
-  try {
-    const value = el.textContent.trim();
-    if (String(getPath(path)) === value) return;
-    updateField(path, value, el);
-    preview();
-  } catch (error) {
-    el.textContent = getPath(path);
-    fail(error);
-  }
-});
-
-$('#project-picker')?.addEventListener('change', async event => {
-  const id = event.target.value;
-  if (!id) return;
-  try {
-    await saveChain;
-    await loadProject(id);
-  } catch (error) {
-    fail(error);
-  }
-});
-
-$('#new-project')?.addEventListener('click', async () => {
-  const confirmCreate = confirm("Create a new shoot? Your current shoot remains saved in the dropdown.");
-  if (!confirmCreate) return;
-  try {
-    await saveChain;
-    state = newProject();
-
-    const savedContractor = localStorage.getItem('wrapsheet.defaultContractor');
-    if (savedContractor) {
-      try {
-        state.contractor = { ...state.contractor, ...JSON.parse(savedContractor) };
-      } catch { }
+    else if (el.id === 'format-input' && /\.json$/i.test(files[0].name)) {
+      const f = importFormat(await files[0].text());
+      await saveFormat(f); message(`Format "${f.name}" added and in use.`);
     }
-
-    images = new Map();
-    tab = 'project';
-    location.hash = 'project';
-    await save();
-    setSetting('currentProjectId', state.id);
-    render();
-  } catch (error) {
-    fail(error);
-  }
+    else if (el.id === 'format-input') {
+      message('Reading the spreadsheet…', true);
+      const draft = await formatFromSpreadsheet(files[0]);
+      message('');
+      const saved = await openFormatEditor(draft, { isNew: true });
+      if (saved) { await saveFormat(saved); message(`Format "${saved.name}" saved and in use.`); }
+    }
+    else if (el.id === 'backup-input') await restoreBackup(files[0]);
+    else if (el.id === 'review-input') { $('#settings').close(); await importReview(files[0]); }
+    else if (el.id === 'logo-input') { const logo = await compressImage(files[0], 500, 0.9); state.contractor.logo = logo; setSetting('profileLogo', logo); await save(); openProfile(); }
+    el.value = '';
+  } catch (error) { el.value = ''; fail(error); }
 });
 
-$('#settings-button')?.addEventListener('click', () => {
-  $('#api-key').value = setting('apiKey');
-  $('#settings').showModal();
+$('#profile-form').addEventListener('submit', async ev => {
+  ev.preventDefault();
+  const d = Object.fromEntries(new FormData(ev.target));
+  Object.assign(state.contractor, d);
+  saveProfile(state.contractor);
+  $('#profile-dialog').close(); await save(); render(); message('Profile saved.');
 });
-$('#close-settings')?.addEventListener('click', () => $('#settings').close());
-$('#settings-form')?.addEventListener('submit', event => {
-  event.preventDefault();
-  const cleanKey = $('#api-key').value.replace(/\s+/g, '');
-  setSetting('apiKey', cleanKey);
-  $('#settings').close();
-  message('API key saved.');
-  render();
-});
-$('#clear-key')?.addEventListener('click', () => {
-  setSetting('apiKey', '');
-  $('#api-key').value = '';
-  message('API key removed.');
-  render();
-});
-
-window.addEventListener('hashchange', () => {
-  const next = location.hash.slice(1);
-  if (['project', 'work', 'receipts', 'invoice'].includes(next) && !scanBusy && !renderBusy) {
-    tab = next;
-    render();
-  }
-});
-
-const originalRender = render;
-render = function () {
-  originalRender();
-  if (tab === 'receipts') {
-    initDragAndDrop();
-    initSwipeListeners();
-  }
-};
+$('#project-picker').addEventListener('change', async ev => { try { await saveChain; await loadProject(ev.target.value); } catch (error) { fail(error); } });
+$('#new-project').addEventListener('click', openNewInvoice);
+$('#settings-button').addEventListener('click', () => openSettings());
+$('#profile-button').addEventListener('click', openProfile);
+$('#delete-project').addEventListener('click', () => actions['delete-project']().catch(fail));
+window.addEventListener('hashchange', () => { const next = location.hash.slice(1); if (TABS.includes(next) && !busy && next !== tab) { tab = next; render(); } });
 
 async function boot() {
   try {
     await db.openDB();
-    projects = await db.all('projects');
-    templates = await db.all('templates');
+    projects = (await db.all('projects')).map(upgradeProject);
+    formats = await db.all('formats');
+    events = await db.all('schedule');
     const current = setting('currentProjectId');
-    const existing = projects.find(p => p.id === current) || projects.sort((a, b) => b.updatedAt - a.updatedAt)[0];
-    if (existing) await loadProject(existing.id);
-    else {
-      state = newProject();
-      const savedContractor = localStorage.getItem('wrapsheet.defaultContractor');
-      if (savedContractor) {
-        try {
-          state.contractor = { ...state.contractor, ...JSON.parse(savedContractor) };
-        } catch { }
-      }
-      await save();
-      setSetting('currentProjectId', state.id);
-    }
-    tab = ['project', 'work', 'receipts', 'invoice'].includes(location.hash.slice(1)) ? location.hash.slice(1) : 'project';
-    render();
-    initSwipeListeners();
+    const existing = projects.find(p => p.id === current) || [...projects].sort((a, b) => b.updatedAt - a.updatedAt)[0];
+    tab = TABS.includes(location.hash.slice(1)) ? location.hash.slice(1) : 'details';
+    if (existing) await loadProject(existing.id); else await createProject(BUILTIN_FORMATS[0]);
     if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js').catch(() => { });
-  } catch (error) {
-    fail(error);
-  }
+  } catch (error) { fail(error); }
 }
-
 boot();
-// Keyboard equivalent for the preview's existing click action.
-document.addEventListener('keydown', event => {
-  if (event.target.id === 'scaler-viewport' && ['Enter', ' '].includes(event.key)) {
-    event.preventDefault(); $('#invoice-zoom-modal')?.showModal(); preview();
-  }
-});

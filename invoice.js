@@ -1,15 +1,14 @@
-import { renderPDFTemplate } from './pdf-template.js';
-import { money, totals, round } from './model.js';
+import { money, totals, round, isBillable, byDateTime } from './model.js';
 
 export const escapeHTML = v => String(v ?? '').replace(/[&<>"']/g, c => ({
   '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
 }[c]));
 
 export const presets = [
-  { id: 'production', name: 'Production Modern (Clean & Bold)' },
-  { id: 'minimal', name: 'Editorial Swiss (Clean Hairlines)' },
-  { id: 'traditional', name: 'Commercial (Formal Accounting)' },
-  { id: 'receipt-heavy', name: 'Field Ledger (Receipt-First Proof)' }
+  { id: 'production', name: 'Production' },
+  { id: 'minimal', name: 'Minimal' },
+  { id: 'traditional', name: 'Formal' },
+  { id: 'receipt-heavy', name: 'Receipt ledger' }
 ];
 
 const ko = {
@@ -21,41 +20,11 @@ const ko = {
   receiptsTitle: '영수증 증빙'
 };
 
-export function sanitizeTemplate(source) {
-  const doc = new DOMParser().parseFromString(source, 'text/html');
-  const allowed = new Set(['SECTION', 'DIV', 'HEADER', 'FOOTER', 'MAIN', 'ARTICLE', 'H1', 'H2', 'H3', 'H4', 'P', 'SPAN', 'STRONG', 'B', 'EM', 'I', 'BR', 'HR', 'TABLE', 'THEAD', 'TBODY', 'TR', 'TH', 'TD', 'UL', 'OL', 'LI']);
-  const blocked = new Set(['SCRIPT', 'STYLE', 'IFRAME', 'OBJECT', 'EMBED', 'LINK', 'META', 'SVG', 'MATH', 'FORM', 'INPUT', 'BUTTON', 'TEXTAREA', 'SELECT', 'TEMPLATE', 'IMG', 'AUDIO', 'VIDEO']);
-  const clean = node => {
-    for (const child of [...node.children]) {
-      if (blocked.has(child.tagName)) { child.remove(); continue; }
-      clean(child);
-      if (!allowed.has(child.tagName)) { child.replaceWith(...child.childNodes); continue; }
-      for (const a of [...child.attributes]) child.removeAttribute(a.name);
-    }
-  };
-  clean(doc.body);
-  return doc.body.innerHTML;
-}
-
-export const placeholders = ['invoiceTitle', 'contractorName', 'clientName', 'clientAddress', 'projectTitle', 'invoiceNumber', 'invoiceDate', 'dueDate', 'shootDates', 'contractorDetails', 'logo', 'laborTable', 'expenseTable', 'laborTotal', 'expenseTotal', 'taxTotal', 'totalAmountDue', 'totals', 'paymentDetails', 'notes', 'receiptGallery', 'footer'];
-
-export function checkTemplate(html) {
-  const unknown = [...html.matchAll(/{{\s*(\w+)\s*}}/g)].map(m => m[1]).filter(p => !placeholders.includes(p));
-  if (unknown.length) throw new Error(`Unknown placeholders: ${[...new Set(unknown)].join(', ')}`);
-  for (const required of ['laborTable', 'expenseTable', 'totals']) {
-    if (!html.includes(`{{${required}}}`)) throw new Error(`Template must contain {{${required}}} to keep invoice reviewable.`);
-  }
-  return html;
-}
-
-export function renderInvoice(template, s, { editable = false } = {}) {
-  if (template?.pdf) return renderPDFTemplate(template, s);
+export function renderInvoice(presetId, s) {
   const e = escapeHTML, c = s.project.currency, t = totals(s), o = s.invoice.options || {};
-  const currentPresetId = template?.id || s.invoice.templateId || 'production';
-
-  const edit = (path, value, type = 'text') => editable
-    ? `<span contenteditable="plaintext-only" role="textbox" aria-label="${e(path)}" data-edit="${e(path)}" data-type="${type}">${e(value)}</span>`
-    : e(value);
+  const currentPresetId = presets.some(p => p.id === presetId) ? presetId : 'production';
+  const editable = false;
+  const edit = (path, value) => e(value);
 
   const label = k => edit(`invoice.labels.${k}`, s.invoice.labels[k]) + (o.bilingualLabels ? ` / ${ko[k]}` : '');
   const text = (path, value) => edit(path, value);
@@ -81,14 +50,15 @@ export function renderInvoice(template, s, { editable = false } = {}) {
     </section>
   `;
 
-  const expenseRows = s.expenses.filter(r => r.verified).map((r, i) => `
+  const billable = s.expenses.map((r, i) => ({ ...r, _i: r._i ?? i })).filter(isBillable).sort(byDateTime);
+  const expenseRows = billable.map(r => { const i = r._i; return `
     <tr>
-      <td>${text(`expenses.${i}.vendor`, r.vendor)}<br><small style="color:#666">${text(`expenses.${i}.date`, r.date)}</small></td>
+      <td>${text(`expenses.${i}.vendor`, r.vendor)}<br><small style="color:#666">${text(`expenses.${i}.date`, r.date)}${r.time ? ' ' + e(r.time) : ''}${r.status === 'check' ? ' · needs check' : ''}</small></td>
       ${o.showExpenseCategories ? `<td>${text(`expenses.${i}.category`, r.category)}</td>` : ''}
       ${o.showVat ? `<td>${editable ? edit(`expenses.${i}.vat`, r.vat, 'number') : cash(r.vat)}</td>` : ''}
       <td style="text-align:right"><strong>${editable ? edit(`expenses.${i}.total`, r.total, 'number') : cash(r.total)}</strong></td>
     </tr>
-  `).join('');
+  `; }).join('');
 
   const expenseTable = `
     <section class="invoice-section">
@@ -104,7 +74,7 @@ export function renderInvoice(template, s, { editable = false } = {}) {
         </thead>
         <tbody>${expenseRows || `<tr><td colspan="${2 + Number(o.showVat) + Number(o.showExpenseCategories)}" style="text-align:center; padding:12px; color:#888;">No verified expenses</td></tr>`}</tbody>
       </table>
-      <p style="font-size:9px; color:#777; margin-top:4px;">Reimbursements include receipt VAT; it is not added again.</p>
+      <p style="font-size:9px; color:#777; margin-top:4px;">${s.project.vatOnExpenses && s.project.taxType === 'vat' ? 'VAT is charged on reimbursed expenses as agreed with the client.' : 'Reimbursements include receipt VAT; it is not added again.'}</p>
     </section>
   `;
 
@@ -112,7 +82,7 @@ export function renderInvoice(template, s, { editable = false } = {}) {
     <section class="proof-section" style="margin-top:24px; break-inside:avoid; page-break-inside:avoid;">
       <h2>${label('receiptsTitle')}</h2>
       <div class="proof-grid" style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
-        ${s.expenses.filter(r => r.verified).map((r, i) => `
+        ${billable.map((r, i) => `
           <figure style="border:1px solid #e0e0e0; padding:8px; border-radius:4px; background:#fafafa; break-inside:avoid;">
             ${r.imageThumbnail ? `<img src="${e(r.imageThumbnail)}" alt="Receipt Proof" style="width:100%; height:160px; object-fit:contain; background:#fff; border-radius:2px;">` : '<p style="padding:40px 0; text-align:center; color:#999; font-size:11px;">Manual expense</p>'}
             <figcaption style="font-size:9px; color:#555; margin-top:6px; text-align:center;">
@@ -125,7 +95,7 @@ export function renderInvoice(template, s, { editable = false } = {}) {
   ` : '';
 
   // Adaptive tax calculation label and sign
-  const taxTitle = t.isWithholding ? 'Withholding tax' : 'Labor tax (VAT)';
+  const taxTitle = t.isWithholding ? 'Withholding tax' : (s.project.vatOnExpenses ? 'VAT (work + expenses)' : 'Labor tax (VAT)');
   const taxPrefix = t.isWithholding ? '−' : '+';
   const totalBlock = `
     <div class="invoice-totals">
@@ -141,7 +111,7 @@ export function renderInvoice(template, s, { editable = false } = {}) {
       <h2>${label('paymentTitle')}</h2>
       <p style="font-size:11px; line-height:1.6;">
         Bank: <strong>${text('contractor.bankName', s.contractor.bankName)}</strong><br>
-        Account: <strong>${text('contractor.accountNumber', s.contractor.accountNumber)}</strong><br>
+        Account: <strong>${text('contractor.accountNumber', s.contractor.accountNumber)}</strong>${s.contractor.accountHolder ? ` (${e(s.contractor.accountHolder)})` : ''}<br>
         Terms: ${text('contractor.paymentTerms', s.contractor.paymentTerms)}
       </p>
     </section>
@@ -154,35 +124,6 @@ export function renderInvoice(template, s, { editable = false } = {}) {
     </section>
   ` : '';
 
-  if (template?.html) {
-    const values = {
-      invoiceTitle: label('invoiceTitle'),
-      contractorName: text('contractor.name', s.contractor.name),
-      clientName: text('project.clientName', s.project.clientName),
-      clientAddress: text('project.clientAddress', s.project.clientAddress),
-      projectTitle: text('project.projectTitle', s.project.projectTitle),
-      invoiceNumber: text('project.invoiceNumber', s.project.invoiceNumber),
-      invoiceDate: text('project.invoiceDate', s.project.invoiceDate),
-      dueDate: text('project.dueDate', s.project.dueDate),
-      shootDates: `${e(s.project.shootStart)} – ${e(s.project.shootEnd)}`,
-      contractorDetails: `${text('contractor.address', s.contractor.address)}<br>${text('contractor.email', s.contractor.email)} · ${text('contractor.phone', s.contractor.phone)}<br>${text('contractor.taxId', s.contractor.taxId)}`,
-      logo: s.contractor.logo ? `<img class="logo" src="${e(s.contractor.logo)}" alt="Logo" style="max-height:45px; margin-bottom:8px;">` : '',
-      laborTable,
-      expenseTable,
-      receiptGallery,
-      laborTotal: cash(t.labor),
-      expenseTotal: cash(t.expenses),
-      taxTotal: `${taxPrefix}${cash(t.tax)}`,
-      totalAmountDue: cash(t.total),
-      totals: totalBlock,
-      paymentDetails,
-      notes,
-      footer: text('contractor.footer', s.contractor.footer)
-    };
-    const safe = checkTemplate(sanitizeTemplate(template.html));
-    return safe.replace(/{{\s*(\w+)\s*}}/g, (_, key) => values[key] ?? '');
-  }
-
   // PRESET 1: PRODUCTION
   if (currentPresetId === 'production') {
     return `
@@ -191,7 +132,7 @@ export function renderInvoice(template, s, { editable = false } = {}) {
           <div>
             ${s.contractor.logo ? `<img src="${e(s.contractor.logo)}" alt="Logo" class="logo">` : ''}
             <h1>${label('invoiceTitle')}</h1>
-            <p style="font-size:12px; font-weight:700;">${text('contractor.name', s.contractor.name || 'Contractor')}</p>
+            <p style="font-size:12px; font-weight:700;">${text('contractor.name', s.contractor.name || 'Contractor')}${s.contractor.role ? ` · ${e(s.contractor.role)}` : ''}</p>
             <p style="font-size:10px; color:#555;">${text('contractor.email', s.contractor.email)} · ${text('contractor.phone', s.contractor.phone)} · ID: ${text('contractor.taxId', s.contractor.taxId || 'n/a')}</p>
           </div>
           <div class="inv-meta">
@@ -222,8 +163,8 @@ export function renderInvoice(template, s, { editable = false } = {}) {
         ${receiptGallery}
 
         <footer class="invoice-footer">
-          <span>WRAPSHEET FIELD EDITION</span>
-          <span>${text('contractor.footer', s.contractor.footer || 'FOOTER')}</span>
+          <span>${e(s.project.invoiceNumber)}</span>
+          <span>${e(s.contractor.footer || '')}</span>
         </footer>
       </article>
     `;
@@ -271,8 +212,8 @@ export function renderInvoice(template, s, { editable = false } = {}) {
         ${receiptGallery}
 
         <footer class="invoice-footer" style="margin-top:36px; padding-top:14px; border-top:1px solid #000; font-size:9px; color:#555; letter-spacing:1px; text-transform:uppercase;">
-          <span>SWISS EDITORIAL</span>
-          <span>${text('contractor.footer', s.contractor.footer || 'FOOTER')}</span>
+          <span>${e(s.project.invoiceNumber)}</span>
+          <span>${e(s.contractor.footer || '')}</span>
         </footer>
       </article>
     `;
@@ -308,7 +249,7 @@ export function renderInvoice(template, s, { editable = false } = {}) {
         ${receiptGallery}
 
         <div style="text-align:center; margin-top:28px; border-top:1px dotted #999; padding-top:10px; font-size:9px; color:#666; letter-spacing:1px; text-transform:uppercase;">
-          ${text('contractor.footer', s.contractor.footer || 'OFFICIAL COMMERCIAL INVOICE')}
+          ${e(s.contractor.footer || '')}
         </div>
       </article>
     `;
@@ -318,7 +259,7 @@ export function renderInvoice(template, s, { editable = false } = {}) {
   return `
     <article class="invoice-paper-layout receipt-heavy-theme">
       <div style="background:#111; color:#fff; padding:6px 12px; font-family:var(--font-accent, monospace); font-size:11px; font-weight:700; display:flex; justify-content:space-between; margin-bottom:18px;">
-        <span>FIELD DISBURSEMENT & WRAP SHEET</span>
+        <span>EXPENSE CLAIM & INVOICE</span>
         <span>REF: ${text('project.invoiceNumber', s.project.invoiceNumber)}</span>
       </div>
 
@@ -347,8 +288,8 @@ export function renderInvoice(template, s, { editable = false } = {}) {
       ${paymentDetails}
 
       <footer class="invoice-footer" style="margin-top:32px; padding-top:12px; border-top:1px solid #333; display:flex; justify-content:space-between; font-size:9px; color:#888;">
-        <span>WRAPSHEET FIELD SPECIFICATION</span>
-        <span>${text('contractor.footer', s.contractor.footer || 'VERIFIED ORIGINALS')}</span>
+        <span>${e(s.project.invoiceNumber)}</span>
+        <span>${e(s.contractor.footer || '')}</span>
       </footer>
     </article>
   `;
